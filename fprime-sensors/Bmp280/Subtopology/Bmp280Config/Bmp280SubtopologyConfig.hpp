@@ -7,8 +7,8 @@
 #define Bmp280_Bmp280SubtopologyConfig_hpp
 
 struct BmpDevice {
-    const char* device;
-    int select;
+    int device;  // SPI bus number (e.g., 0 for SPI bus 0)
+    int select;  // SPI chip select pin (e.g., 0 for CS0)
 };
 
 #endif // Bmp280_Bmp280SubtopologyConfig_hpp 
