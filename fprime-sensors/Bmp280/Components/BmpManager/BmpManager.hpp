@@ -100,11 +100,17 @@ class BmpManager final : public BmpManagerComponentBase {
     //! Read the chip ID
     bool read_chip_id(U8& id);
 
+    //! Read the status register
+    bool read_status(U8& status);
+
     //! Read calibration data
     bool read_calibration_data();
 
     //! Configure the BMP280
     bool configure_device();
+    
+    //! Trigger a measurement in forced mode
+    bool trigger_measurement();
 
     //! Write to the SPI bus and handle errors
     bool spi_transfer(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer);
@@ -113,13 +119,25 @@ class BmpManager final : public BmpManagerComponentBase {
     RawBmpData deserialize_raw_data(Fw::Buffer& buffer);
 
     //! State of the BMP280 component
-    enum BmpState { RESET, CHIP_ID_CHECK, CALIBRATION_READ, CONFIGURE, RUNNING };
+    enum BmpState { RESET, STARTUP_DELAY, CHIP_ID_CHECK, CALIBRATION_READ, CONFIGURE, RUNNING };
 
     //! Tracks the state of the BMP280
     BmpState m_state;
 
+    //! Reset attempt counter
+    U32 m_resetAttempts;
+    
+    //! Startup delay counter
+    U32 m_startupCounter;
+
     //! Calibration data
     CalibrationData m_calibration;
+    
+    //! Maximum number of reset attempts before giving up
+    static constexpr U32 MAX_RESET_ATTEMPTS = 5;
+    
+    //! Number of cycles to wait after reset for device startup (approximately 2ms at typical scheduling rates)
+    static constexpr U32 STARTUP_DELAY_CYCLES = 2;
 };
 
 }  // namespace Bmp280

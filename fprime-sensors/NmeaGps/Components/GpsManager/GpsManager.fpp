@@ -6,10 +6,10 @@ module NmeaGps {
         telemetry Reading: GpsData
 
         @ Report for malformed message
-        event MalformedMessage(message_type: string, successful_fields: U8) severity warning low format "Malformed {} message after {} fields"
+        event MalformedMessage(message_type: string, successful_fields: U8) severity warning low format "Malformed {} message after {} fields" throttle 5 
 
         @ Report for invalid message
-        event InvalidData(message_type: string) severity warning low format "{} data  marked invalid"
+        event InvalidData(message_type: string) severity warning low format "{} data  marked invalid" throttle 5 
 
         ###############################################################################
         # Deframer "In" Ports: Mascarades as a deframer to use the FrameAccumulator   #

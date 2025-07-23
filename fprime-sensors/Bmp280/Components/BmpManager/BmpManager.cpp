@@ -6,6 +6,7 @@
 
 #include "fprime-sensors/Bmp280/Components/BmpManager/BmpManager.hpp"
 #include <cmath>
+#include <cstdio>  // For printf debugging
 
 namespace Bmp280 {
 
@@ -13,7 +14,9 @@ namespace Bmp280 {
 // Component construction and destruction
 // ----------------------------------------------------------------------
 
-BmpManager ::BmpManager(const char* const compName) : BmpManagerComponentBase(compName), m_state(RESET) {}
+BmpManager ::BmpManager(const char* const compName) : BmpManagerComponentBase(compName), m_state(RESET), m_resetAttempts(0) {
+    printf("[BmpManager] Constructor: Starting in RESET state\n");
+}
 
 BmpManager ::~BmpManager() {}
 
@@ -22,6 +25,7 @@ BmpManager ::~BmpManager() {}
 // ----------------------------------------------------------------------
 
 void BmpManager ::parameterUpdated(FwPrmIdType id) {
+    printf("[BmpManager] Parameter updated: ID=%d\n", static_cast<int>(id));
     Fw::ParamValid isValid = Fw::ParamValid::INVALID;
     switch (id) {
         case PARAMID_PRESSURE_OVERSAMPLING: {
@@ -30,6 +34,7 @@ void BmpManager ::parameterUpdated(FwPrmIdType id) {
             // NOTE: isValid is always VALID in parameterUpdated as it was just properly set
             FW_ASSERT(isValid == Fw::ParamValid::VALID, static_cast<FwAssertArgType>(isValid));
             this->log_ACTIVITY_HI_PressureOversamplingUpdated(oversampling);
+            printf("[BmpManager] Pressure oversampling updated to %d, transitioning to CONFIGURE\n", static_cast<int>(oversampling.e));
             this->m_state = CONFIGURE;
             break;
         }
@@ -39,55 +44,121 @@ void BmpManager ::parameterUpdated(FwPrmIdType id) {
             // NOTE: isValid is always VALID in parameterUpdated as it was just properly set
             FW_ASSERT(isValid == Fw::ParamValid::VALID, static_cast<FwAssertArgType>(isValid));
             this->log_ACTIVITY_HI_TemperatureOversamplingUpdated(oversampling);
+            printf("[BmpManager] Temperature oversampling updated to %d, transitioning to CONFIGURE\n", static_cast<int>(oversampling.e));
             this->m_state = CONFIGURE;
             break;
         }
         case PARAMID_SEA_LEVEL_PRESSURE: {
-            // Sea level pressure parameter updated - no need to reconfigure device
+            printf("[BmpManager] Sea level pressure parameter updated - no reconfiguration needed\n");
             break;
         }
         default:
+            printf("[BmpManager] ERROR: Unknown parameter ID %d\n", static_cast<int>(id));
             FW_ASSERT(0, static_cast<FwAssertArgType>(id));
             break;
     }
 }
 
 void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
+    printf("[BmpManager] run_handler called, current state: %d\n", static_cast<int>(m_state));
+    
     switch (this->m_state) {
         case RESET:
-            // If reset is successful, move to CHIP_ID_CHECK state
+            printf("[BmpManager] RESET state: attempt %d\n", m_resetAttempts);
+            // If reset is successful, move to STARTUP_DELAY state
             if (this->reset()) {
+                printf("[BmpManager] Reset command sent successfully, waiting for startup delay\n");
+                this->m_state = STARTUP_DELAY;
+                this->m_startupCounter = STARTUP_DELAY_CYCLES;
+            } else {
+                printf("[BmpManager] Reset command failed\n");
+                m_resetAttempts++;
+                if (m_resetAttempts > MAX_RESET_ATTEMPTS) {
+                    printf("[BmpManager] ERROR: Maximum reset attempts exceeded\n");
+                    // Stay in RESET state but log error
+                    m_resetAttempts = 0;
+                }
+            }
+            break;
+            
+        case STARTUP_DELAY:
+            printf("[BmpManager] STARTUP_DELAY state: %d cycles remaining\n", m_startupCounter);
+            m_startupCounter--;
+            if (m_startupCounter <= 0) {
+                printf("[BmpManager] Startup delay complete, transitioning to CHIP_ID_CHECK\n");
                 this->m_state = CHIP_ID_CHECK;
             }
             break;
+            
         case CHIP_ID_CHECK: {
+            printf("[BmpManager] CHIP_ID_CHECK state\n");
             U8 chip_id = 0;
             if (this->read_chip_id(chip_id)) {
+                printf("[BmpManager] Chip ID read successfully: 0x%02X\n", chip_id);
                 if (chip_id == CHIP_ID_VALUE) {
+                    printf("[BmpManager] Chip ID matches expected value (0x%02X), transitioning to CALIBRATION_READ\n", CHIP_ID_VALUE);
                     this->m_state = CALIBRATION_READ;
                 } else {
+                    printf("[BmpManager] ERROR: Chip ID mismatch. Expected 0x%02X, got 0x%02X. Resetting.\n", CHIP_ID_VALUE, chip_id);
                     this->m_state = RESET;
+                    m_resetAttempts = 0;
                 }
             } else {
+                printf("[BmpManager] ERROR: Failed to read chip ID. Resetting.\n");
                 this->m_state = RESET;
+                m_resetAttempts = 0;
             }
             break;
         }
         case CALIBRATION_READ:
+            printf("[BmpManager] CALIBRATION_READ state\n");
             if (this->read_calibration_data()) {
+                printf("[BmpManager] Calibration data read successfully, transitioning to CONFIGURE\n");
                 this->m_state = CONFIGURE;
             } else {
+                printf("[BmpManager] ERROR: Failed to read calibration data. Resetting.\n");
                 this->m_state = RESET;
+                m_resetAttempts = 0;
             }
             break;
         case CONFIGURE:
+            printf("[BmpManager] CONFIGURE state\n");
             if (this->configure_device()) {
+                printf("[BmpManager] Device configured successfully, transitioning to RUNNING\n");
                 this->m_state = RUNNING;
             } else {
+                printf("[BmpManager] ERROR: Failed to configure device. Resetting.\n");
                 this->m_state = RESET;
+                m_resetAttempts = 0;
             }
             break;
         case RUNNING: {
+            printf("[BmpManager] RUNNING state\n");
+            
+            // Step 1: Check if measurement is ready
+            U8 status = 0;
+            if (!this->read_status(status)) {
+                printf("[BmpManager] ERROR: Failed to read status register. Resetting.\n");
+                this->m_state = RESET;
+                m_resetAttempts = 0;
+                break;
+            }
+            
+            // Check if measurement is in progress (bit 3) or if data is being updated (bit 0)
+            if ((status & 0x08) || (status & 0x01)) {
+                printf("[BmpManager] Measurement in progress (status=0x%02X), waiting...\n", status);
+                break; // Wait for next cycle
+            }
+            
+            // Step 2: Trigger a new measurement in forced mode
+            if (!this->trigger_measurement()) {
+                printf("[BmpManager] ERROR: Failed to trigger measurement. Resetting.\n");
+                this->m_state = RESET;
+                m_resetAttempts = 0;
+                break;
+            }
+            
+            // Step 3: Read measurement data
             U8 data[MEASUREMENT_DATA_LENGTH];
             U8 registerAddress = PRESSURE_MSB_REGISTER;
 
@@ -95,7 +166,9 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
             Fw::Buffer readBuffer(data, MEASUREMENT_DATA_LENGTH);
             
             if (this->spi_transfer(writeBuffer, readBuffer)) {
+                printf("[BmpManager] Raw measurement data read successfully\n");
                 RawBmpData raw = this->deserialize_raw_data(readBuffer);
+                printf("[BmpManager] Raw pressure: %u, Raw temperature: %u\n", raw.pressure, raw.temperature);
                 
                 // Get sea level pressure parameter
                 Fw::ParamValid paramValid;
@@ -103,13 +176,18 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
                 FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
                 
                 const Bmp280Data bmpData = this->convert_raw_data(raw, this->m_calibration, seaLevelPressure);
+                printf("[BmpManager] Converted data - Pressure: %.2f Pa, Temperature: %.2f C, Altitude: %.2f m\n", 
+                       bmpData.getpressure(), bmpData.gettemperature(), bmpData.getaltitude());
                 this->tlmWrite_Reading(bmpData);
             } else {
+                printf("[BmpManager] ERROR: Failed to read measurement data. Resetting.\n");
                 this->m_state = RESET;
+                m_resetAttempts = 0;
             }
             break;
         }
         default:
+            printf("[BmpManager] ERROR: Unknown state %d\n", static_cast<int>(m_state));
             FW_ASSERT(0, this->m_state);
             break;
     }
@@ -120,20 +198,39 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
 // ----------------------------------------------------------------------
 
 bool BmpManager ::reset() {
+    printf("[BmpManager] Sending reset command (0x%02X -> 0x%02X)\n", RESET_REGISTER, RESET_VALUE);
     U8 reset_sequence[] = {RESET_REGISTER, RESET_VALUE};
     Fw::Buffer writeBuffer(reset_sequence, sizeof(reset_sequence));
     Fw::Buffer readBuffer;
-    return this->spi_transfer(writeBuffer, readBuffer);
+    bool success = this->spi_transfer(writeBuffer, readBuffer);
+    printf("[BmpManager] Reset command %s\n", success ? "succeeded" : "failed");
+    return success;
 }
 
 bool BmpManager ::read_chip_id(U8& id) {
+    printf("[BmpManager] Reading chip ID from register 0x%02X\n", CHIP_ID_REGISTER);
     U8 registerAddress = CHIP_ID_REGISTER;
     Fw::Buffer writeBuffer(&registerAddress, 1);
     Fw::Buffer readBuffer(&id, 1);
+    bool success = this->spi_transfer(writeBuffer, readBuffer);
+    if (success) {
+        printf("[BmpManager] Chip ID read: 0x%02X\n", id);
+    } else {
+        printf("[BmpManager] Failed to read chip ID\n");
+    }
+    return success;
+}
+
+bool BmpManager ::read_status(U8& status) {
+    U8 registerAddress = STATUS_REGISTER;
+    Fw::Buffer writeBuffer(&registerAddress, 1);
+    Fw::Buffer readBuffer(&status, 1);
     return this->spi_transfer(writeBuffer, readBuffer);
 }
 
 bool BmpManager ::read_calibration_data() {
+    printf("[BmpManager] Reading calibration data from register 0x%02X, length %d bytes\n", 
+           CALIB_DATA_REGISTER, CALIB_DATA_LENGTH);
     U8 data[CALIB_DATA_LENGTH];
     U8 registerAddress = CALIB_DATA_REGISTER;
     Fw::Buffer writeBuffer(&registerAddress, 1);
@@ -145,18 +242,64 @@ bool BmpManager ::read_calibration_data() {
         // Implementation would parse calibration coefficients
         return true;
     }
+    printf("[BmpManager] Failed to read calibration data\n");
     return false;
 }
 
 bool BmpManager ::configure_device() {
+    printf("[BmpManager] Configuring device\n");
     Fw::ParamValid paramValid;
     const PressureOversampling pressureOversampling = this->paramGet_PRESSURE_OVERSAMPLING(paramValid);
     FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
     const TemperatureOversampling temperatureOversampling = this->paramGet_TEMPERATURE_OVERSAMPLING(paramValid);
     FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
 
-    U8 ctrl_meas_value = static_cast<U8>(temperatureOversampling) | 
-                         static_cast<U8>(pressureOversampling) | 
+    // According to datasheet, CTRL_MEAS register (0xF4) format:
+    // bits 7:5 = osrs_t (temperature oversampling)  
+    // bits 4:2 = osrs_p (pressure oversampling)
+    // bits 1:0 = mode (00=sleep, 01=forced, 11=normal)
+    U8 ctrl_meas_value = (static_cast<U8>(temperatureOversampling) << 5) | 
+                         (static_cast<U8>(pressureOversampling) << 2) | 
+                         0x00; // Start in sleep mode first
+    
+    printf("[BmpManager] Setting CTRL_MEAS register to 0x%02X (temp_os=%d, press_os=%d, mode=sleep)\n", 
+           ctrl_meas_value, static_cast<int>(temperatureOversampling.e), static_cast<int>(pressureOversampling.e));
+    
+    U8 config_sequence[] = {CTRL_MEAS_REGISTER, ctrl_meas_value};
+    Fw::Buffer writeBuffer(config_sequence, sizeof(config_sequence));
+    Fw::Buffer readBuffer;
+    
+    bool success = this->spi_transfer(writeBuffer, readBuffer);
+    
+    if (success) {
+        // Also configure the CONFIG register (0xF5) for IIR filter and standby time
+        // bits 7:5 = t_sb (standby time in normal mode) - not used in forced mode
+        // bits 4:2 = filter (IIR filter coefficient)
+        // bit 0 = spi3w_en (3-wire SPI enable)
+        U8 config_value = 0x00; // No IIR filter, 4-wire SPI
+        U8 config_sequence[] = {CONFIG_REGISTER, config_value};
+        Fw::Buffer configWriteBuffer(config_sequence, sizeof(config_sequence));
+        Fw::Buffer configReadBuffer;
+        
+        printf("[BmpManager] Setting CONFIG register to 0x%02X\n", config_value);
+        success = this->spi_transfer(configWriteBuffer, configReadBuffer);
+    }
+    
+    printf("[BmpManager] Device configuration %s\n", success ? "succeeded" : "failed");
+    return success;
+}
+
+bool BmpManager ::trigger_measurement() {
+    printf("[BmpManager] Triggering measurement in forced mode\n");
+    Fw::ParamValid paramValid;
+    const PressureOversampling pressureOversampling = this->paramGet_PRESSURE_OVERSAMPLING(paramValid);
+    FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
+    const TemperatureOversampling temperatureOversampling = this->paramGet_TEMPERATURE_OVERSAMPLING(paramValid);
+    FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
+
+    // Set device to forced mode to trigger a measurement
+    U8 ctrl_meas_value = (static_cast<U8>(temperatureOversampling) << 5) | 
+                         (static_cast<U8>(pressureOversampling) << 2) | 
                          FORCED_MODE;
     
     U8 config_sequence[] = {CTRL_MEAS_REGISTER, ctrl_meas_value};
@@ -166,9 +309,33 @@ bool BmpManager ::configure_device() {
 }
 
 bool BmpManager ::spi_transfer(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) {
-    // For SPI, we need to handle the transaction differently
-    // SPI typically requires a single transfer with combined write/read buffer
+    printf("[BmpManager] SPI transfer: writing %d bytes, reading %d bytes\n", 
+           writeBuffer.getSize(), readBuffer.getSize());
+    
+    // Print write data for debugging
+    if (writeBuffer.getSize() > 0) {
+        printf("[BmpManager] Write data: ");
+        for (U32 i = 0; i < writeBuffer.getSize(); i++) {
+            printf("0x%02X ", writeBuffer.getData()[i]);
+        }
+        printf("\n");
+    }
+    
+    // Perform the SPI transfer
     this->spiReadWrite_out(0, writeBuffer, readBuffer);
+    
+    // Print read data for debugging
+    if (readBuffer.getSize() > 0) {
+        printf("[BmpManager] Read data: ");
+        for (U32 i = 0; i < readBuffer.getSize(); i++) {
+            printf("0x%02X ", readBuffer.getData()[i]);
+        }
+        printf("\n");
+    }
+    
+    // TODO: In a real implementation, we should check for SPI errors
+    // For now, we assume success but this is where error detection should be added
+    // The Linux SPI driver logs warnings internally if ioctl fails
     return true;
 }
 
@@ -198,15 +365,42 @@ BmpManager::RawBmpData BmpManager ::deserialize_raw_data(Fw::Buffer& buffer) {
 
 Bmp280Data BmpManager ::convert_raw_data(const RawBmpData& raw, const CalibrationData& calib, F32 seaLevelPressure) {
     Bmp280Data bmpData;
-    // Implementation would use calibration coefficients to convert raw data
-    // This is a placeholder implementation - actual BMP280 requires complex calibration
     
-    // Convert to proper units
-    F32 pressure = static_cast<F32>(raw.pressure) / 256.0f;  // Convert to Pascals
-    F32 temperature = static_cast<F32>(raw.temperature) / 5120.0f;  // Convert to Celsius
+    // BMP280 Temperature Compensation (from datasheet)
+    // Returns temperature in DegC, resolution is 0.01 DegC
+    I32 adc_T = static_cast<I32>(raw.temperature);
+    I32 var1, var2, t_fine;
+    var1 = ((((adc_T >> 3) - (static_cast<I32>(calib.dig_T1) << 1))) * static_cast<I32>(calib.dig_T2)) >> 11;
+    var2 = (((((adc_T >> 4) - static_cast<I32>(calib.dig_T1)) * ((adc_T >> 4) - static_cast<I32>(calib.dig_T1))) >> 12) * static_cast<I32>(calib.dig_T3)) >> 14;
+    t_fine = var1 + var2;
+    F32 temperature = static_cast<F32>((t_fine * 5 + 128) >> 8) / 100.0f;
+    
+    // BMP280 Pressure Compensation (from datasheet)
+    // Returns pressure in Pa as unsigned 32 bit integer
+    I32 adc_P = static_cast<I32>(raw.pressure);
+    I64 var1_64, var2_64, p_64;
+    var1_64 = static_cast<I64>(t_fine) - 128000;
+    var2_64 = var1_64 * var1_64 * static_cast<I64>(calib.dig_P6);
+    var2_64 = var2_64 + ((var1_64 * static_cast<I64>(calib.dig_P5)) << 17);
+    var2_64 = var2_64 + (static_cast<I64>(calib.dig_P4) << 35);
+    var1_64 = ((var1_64 * var1_64 * static_cast<I64>(calib.dig_P3)) >> 8) + ((var1_64 * static_cast<I64>(calib.dig_P2)) << 12);
+    var1_64 = (((static_cast<I64>(1) << 47) + var1_64)) * static_cast<I64>(calib.dig_P1) >> 33;
+    
+    F32 pressure = 0.0f;
+    if (var1_64 != 0) {
+        p_64 = 1048576 - adc_P;
+        p_64 = (((p_64 << 31) - var2_64) * 3125) / var1_64;
+        var1_64 = (static_cast<I64>(calib.dig_P9) * (p_64 >> 13) * (p_64 >> 13)) >> 25;
+        var2_64 = (static_cast<I64>(calib.dig_P8) * p_64) >> 19;
+        p_64 = ((p_64 + var1_64 + var2_64) >> 8) + (static_cast<I64>(calib.dig_P7) << 4);
+        pressure = static_cast<F32>(p_64) / 256.0f;
+    }
     
     // Calculate altitude using barometric formula
     F32 altitude = calculate_altitude(pressure, seaLevelPressure);
+    
+    printf("[BmpManager] Temperature compensation: raw=%u -> %.2f°C (t_fine=%d)\n", raw.temperature, temperature, t_fine);
+    printf("[BmpManager] Pressure compensation: raw=%u -> %.2f Pa\n", raw.pressure, pressure);
     
     bmpData.setpressure(pressure);
     bmpData.settemperature(temperature);
@@ -227,12 +421,26 @@ F32 BmpManager ::calculate_altitude(F32 pressure, F32 seaLevelPressure) {
     // Barometric formula for altitude calculation
     // altitude = 44330 * (1 - (pressure / seaLevelPressure)^(1/5.255))
     
+    printf("[BmpManager] Calculating altitude: pressure=%.2f Pa, sea_level=%.2f Pa\n", pressure, seaLevelPressure);
+    
     if (seaLevelPressure <= 0.0f || pressure <= 0.0f) {
+        printf("[BmpManager] ERROR: Invalid pressure values for altitude calculation\n");
         return 0.0f;  // Return 0 for invalid inputs
     }
     
     F32 ratio = pressure / seaLevelPressure;
-    F32 altitude = 44330.0f * (1.0f - pow(ratio, 1.0f / 5.255f));
+    if (ratio <= 0.0f) {
+        printf("[BmpManager] ERROR: Invalid pressure ratio for altitude calculation\n");
+        return 0.0f;
+    }
+    
+    // Using standard atmosphere model constants
+    static const F32 STANDARD_ALTITUDE_CONSTANT = 44330.0f;
+    static const F32 PRESSURE_EXPONENT = 1.0f / 5.255f;
+    
+    F32 altitude = STANDARD_ALTITUDE_CONSTANT * (1.0f - pow(ratio, PRESSURE_EXPONENT));
+    
+    printf("[BmpManager] Altitude calculated: %.2f m (ratio=%.4f)\n", altitude, ratio);
     
     return altitude;
 }

@@ -8,6 +8,9 @@ module MpuImu {
         if (not MpuImu::imuDriver.open(state.mpu.device)) {
             Fw::Logger::log("[ERROR] MPU IMU open failed\\n");
         }
+        else {
+            Fw::Logger::log("[INFO] MPU IMU open successful\\n");
+        }
         """
     }
 }
