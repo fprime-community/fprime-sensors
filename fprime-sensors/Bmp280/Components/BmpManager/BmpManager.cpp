@@ -159,15 +159,22 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
             }
             
             // Step 3: Read measurement data
-            U8 data[MEASUREMENT_DATA_LENGTH];
-            U8 registerAddress = PRESSURE_MSB_REGISTER;
+            // BMP280 SPI protocol: read 6 bytes starting from PRESSURE_MSB_REGISTER
+            U8 spiData[MEASUREMENT_DATA_LENGTH + 1];
+            spiData[0] = PRESSURE_MSB_REGISTER | 0x80; // Register address with MSB=1 for read
+            for (int i = 1; i <= MEASUREMENT_DATA_LENGTH; i++) {
+                spiData[i] = 0x00; // Dummy bytes
+            }
 
-            Fw::Buffer writeBuffer(&registerAddress, 1);
-            Fw::Buffer readBuffer(data, MEASUREMENT_DATA_LENGTH);
+            Fw::Buffer writeBuffer(spiData, MEASUREMENT_DATA_LENGTH + 1);
+            Fw::Buffer readBuffer(spiData, MEASUREMENT_DATA_LENGTH + 1);
             
             if (this->spi_transfer(writeBuffer, readBuffer)) {
                 printf("[BmpManager] Raw measurement data read successfully\n");
-                RawBmpData raw = this->deserialize_raw_data(readBuffer);
+                
+                // Create buffer pointing to actual data (skip first byte which is register echo)
+                Fw::Buffer dataBuffer(&readBuffer.getData()[1], MEASUREMENT_DATA_LENGTH);
+                RawBmpData raw = this->deserialize_raw_data(dataBuffer);
                 printf("[BmpManager] Raw pressure: %u, Raw temperature: %u\n", raw.pressure, raw.temperature);
                 
                 // Get sea level pressure parameter
@@ -199,7 +206,8 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
 
 bool BmpManager ::reset() {
     printf("[BmpManager] Sending reset command (0x%02X -> 0x%02X)\n", RESET_REGISTER, RESET_VALUE);
-    U8 reset_sequence[] = {RESET_REGISTER, RESET_VALUE};
+    // For SPI writes, register address MSB must be 0
+    U8 reset_sequence[] = {RESET_REGISTER & 0x7F, RESET_VALUE}; // Clear MSB for write
     Fw::Buffer writeBuffer(reset_sequence, sizeof(reset_sequence));
     Fw::Buffer readBuffer;
     bool success = this->spi_transfer(writeBuffer, readBuffer);
@@ -209,37 +217,92 @@ bool BmpManager ::reset() {
 
 bool BmpManager ::read_chip_id(U8& id) {
     printf("[BmpManager] Reading chip ID from register 0x%02X\n", CHIP_ID_REGISTER);
-    U8 registerAddress = CHIP_ID_REGISTER;
-    Fw::Buffer writeBuffer(&registerAddress, 1);
-    Fw::Buffer readBuffer(&id, 1);
+    
+    // BMP280 SPI protocol: for reads, MSB must be 1, and we need a 2-byte transaction
+    // Byte 0: Register address with MSB=1 (0xD0 | 0x80 = 0xD0, already has MSB set)
+    // Byte 1: Dummy byte (will be replaced with register value)
+    U8 spiData[2] = {CHIP_ID_REGISTER | 0x80, 0x00}; // Ensure MSB is set for read
+    
+    Fw::Buffer writeBuffer(spiData, 2);
+    Fw::Buffer readBuffer(spiData, 2); // Reuse same buffer for read
+    
     bool success = this->spi_transfer(writeBuffer, readBuffer);
+    
     if (success) {
+        // The chip ID will be in the second byte of the response
+        id = readBuffer.getData()[1];
         printf("[BmpManager] Chip ID read: 0x%02X\n", id);
     } else {
         printf("[BmpManager] Failed to read chip ID\n");
+        id = 0;
     }
     return success;
 }
 
 bool BmpManager ::read_status(U8& status) {
-    U8 registerAddress = STATUS_REGISTER;
-    Fw::Buffer writeBuffer(&registerAddress, 1);
-    Fw::Buffer readBuffer(&status, 1);
-    return this->spi_transfer(writeBuffer, readBuffer);
+    printf("[BmpManager] Reading status from register 0x%02X\n", STATUS_REGISTER);
+    
+    // BMP280 SPI protocol: 2-byte transaction for register read
+    U8 spiData[2] = {STATUS_REGISTER | 0x80, 0x00}; // Ensure MSB is set for read
+    
+    Fw::Buffer writeBuffer(spiData, 2);
+    Fw::Buffer readBuffer(spiData, 2);
+    
+    bool success = this->spi_transfer(writeBuffer, readBuffer);
+    
+    if (success) {
+        status = readBuffer.getData()[1];
+        printf("[BmpManager] Status read: 0x%02X\n", status);
+    } else {
+        printf("[BmpManager] Failed to read status\n");
+        status = 0;
+    }
+    
+    return success;
 }
 
 bool BmpManager ::read_calibration_data() {
     printf("[BmpManager] Reading calibration data from register 0x%02X, length %d bytes\n", 
            CALIB_DATA_REGISTER, CALIB_DATA_LENGTH);
-    U8 data[CALIB_DATA_LENGTH];
-    U8 registerAddress = CALIB_DATA_REGISTER;
-    Fw::Buffer writeBuffer(&registerAddress, 1);
-    Fw::Buffer readBuffer(data, CALIB_DATA_LENGTH);
+    
+    // BMP280 SPI protocol: for multi-byte read, send register address + read 24 bytes
+    // Total transaction: 1 byte register address + 24 bytes data = 25 bytes
+    U8 spiData[CALIB_DATA_LENGTH + 1];
+    spiData[0] = CALIB_DATA_REGISTER | 0x80; // Register address with MSB=1 for read
+    for (int i = 1; i <= CALIB_DATA_LENGTH; i++) {
+        spiData[i] = 0x00; // Dummy bytes that will be filled with calibration data
+    }
+    
+    Fw::Buffer writeBuffer(spiData, CALIB_DATA_LENGTH + 1);
+    Fw::Buffer readBuffer(spiData, CALIB_DATA_LENGTH + 1);
     
     if (this->spi_transfer(writeBuffer, readBuffer)) {
-        // Parse calibration data from the buffer
-        auto deserializer = readBuffer.getDeserializer();
-        // Implementation would parse calibration coefficients
+        printf("[BmpManager] Calibration data read successfully, parsing coefficients\n");
+        
+        // Parse calibration data from the buffer (skip first byte which is the register echo)
+        // Registers 0x88-0x9F contain 12 calibration coefficients (24 bytes)
+        U8* data = &readBuffer.getData()[1]; // Skip the first byte (register address echo)
+        
+        m_calibration.dig_T1 = (static_cast<U16>(data[1]) << 8) | data[0];
+        m_calibration.dig_T2 = (static_cast<I16>(data[3]) << 8) | data[2];
+        m_calibration.dig_T3 = (static_cast<I16>(data[5]) << 8) | data[4];
+        
+        m_calibration.dig_P1 = (static_cast<U16>(data[7]) << 8) | data[6];
+        m_calibration.dig_P2 = (static_cast<I16>(data[9]) << 8) | data[8];
+        m_calibration.dig_P3 = (static_cast<I16>(data[11]) << 8) | data[10];
+        m_calibration.dig_P4 = (static_cast<I16>(data[13]) << 8) | data[12];
+        m_calibration.dig_P5 = (static_cast<I16>(data[15]) << 8) | data[14];
+        m_calibration.dig_P6 = (static_cast<I16>(data[17]) << 8) | data[16];
+        m_calibration.dig_P7 = (static_cast<I16>(data[19]) << 8) | data[18];
+        m_calibration.dig_P8 = (static_cast<I16>(data[21]) << 8) | data[20];
+        m_calibration.dig_P9 = (static_cast<I16>(data[23]) << 8) | data[22];
+        
+        printf("[BmpManager] Calibration coefficients:\n");
+        printf("  dig_T1=%u, dig_T2=%d, dig_T3=%d\n", m_calibration.dig_T1, m_calibration.dig_T2, m_calibration.dig_T3);
+        printf("  dig_P1=%u, dig_P2=%d, dig_P3=%d\n", m_calibration.dig_P1, m_calibration.dig_P2, m_calibration.dig_P3);
+        printf("  dig_P4=%d, dig_P5=%d, dig_P6=%d\n", m_calibration.dig_P4, m_calibration.dig_P5, m_calibration.dig_P6);
+        printf("  dig_P7=%d, dig_P8=%d, dig_P9=%d\n", m_calibration.dig_P7, m_calibration.dig_P8, m_calibration.dig_P9);
+        
         return true;
     }
     printf("[BmpManager] Failed to read calibration data\n");
@@ -265,7 +328,8 @@ bool BmpManager ::configure_device() {
     printf("[BmpManager] Setting CTRL_MEAS register to 0x%02X (temp_os=%d, press_os=%d, mode=sleep)\n", 
            ctrl_meas_value, static_cast<int>(temperatureOversampling.e), static_cast<int>(pressureOversampling.e));
     
-    U8 config_sequence[] = {CTRL_MEAS_REGISTER, ctrl_meas_value};
+    // For SPI writes, register address MSB must be 0
+    U8 config_sequence[] = {CTRL_MEAS_REGISTER & 0x7F, ctrl_meas_value}; // Clear MSB for write
     Fw::Buffer writeBuffer(config_sequence, sizeof(config_sequence));
     Fw::Buffer readBuffer;
     
@@ -277,7 +341,7 @@ bool BmpManager ::configure_device() {
         // bits 4:2 = filter (IIR filter coefficient)
         // bit 0 = spi3w_en (3-wire SPI enable)
         U8 config_value = 0x00; // No IIR filter, 4-wire SPI
-        U8 config_sequence[] = {CONFIG_REGISTER, config_value};
+        U8 config_sequence[] = {CONFIG_REGISTER & 0x7F, config_value}; // Clear MSB for write
         Fw::Buffer configWriteBuffer(config_sequence, sizeof(config_sequence));
         Fw::Buffer configReadBuffer;
         
@@ -302,7 +366,8 @@ bool BmpManager ::trigger_measurement() {
                          (static_cast<U8>(pressureOversampling) << 2) | 
                          FORCED_MODE;
     
-    U8 config_sequence[] = {CTRL_MEAS_REGISTER, ctrl_meas_value};
+    // For SPI writes, register address MSB must be 0
+    U8 config_sequence[] = {CTRL_MEAS_REGISTER & 0x7F, ctrl_meas_value}; // Clear MSB for write
     Fw::Buffer writeBuffer(config_sequence, sizeof(config_sequence));
     Fw::Buffer readBuffer;
     return this->spi_transfer(writeBuffer, readBuffer);
