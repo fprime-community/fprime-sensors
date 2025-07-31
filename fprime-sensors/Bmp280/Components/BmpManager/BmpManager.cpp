@@ -15,7 +15,7 @@ namespace Bmp280 {
 // ----------------------------------------------------------------------
 
 BmpManager ::BmpManager(const char* const compName) : BmpManagerComponentBase(compName), m_state(RESET), m_resetAttempts(0) {
-    printf("[BmpManager] Constructor: Starting in RESET state\n");
+    // printf("[BmpManager] Constructor: Starting in RESET state\n");
 }
 
 BmpManager ::~BmpManager() {}
@@ -34,7 +34,7 @@ void BmpManager ::parameterUpdated(FwPrmIdType id) {
             // NOTE: isValid is always VALID in parameterUpdated as it was just properly set
             FW_ASSERT(isValid == Fw::ParamValid::VALID, static_cast<FwAssertArgType>(isValid));
             this->log_ACTIVITY_HI_PressureOversamplingUpdated(oversampling);
-            printf("[BmpManager] Pressure oversampling updated to %d, transitioning to CONFIGURE\n", static_cast<int>(oversampling.e));
+            // printf("[BmpManager] Pressure oversampling updated to %d, transitioning to CONFIGURE\n", static_cast<int>(oversampling.e));
             this->m_state = CONFIGURE;
             break;
         }
@@ -44,37 +44,37 @@ void BmpManager ::parameterUpdated(FwPrmIdType id) {
             // NOTE: isValid is always VALID in parameterUpdated as it was just properly set
             FW_ASSERT(isValid == Fw::ParamValid::VALID, static_cast<FwAssertArgType>(isValid));
             this->log_ACTIVITY_HI_TemperatureOversamplingUpdated(oversampling);
-            printf("[BmpManager] Temperature oversampling updated to %d, transitioning to CONFIGURE\n", static_cast<int>(oversampling.e));
+            // printf("[BmpManager] Temperature oversampling updated to %d, transitioning to CONFIGURE\n", static_cast<int>(oversampling.e));
             this->m_state = CONFIGURE;
             break;
         }
         case PARAMID_SEA_LEVEL_PRESSURE: {
-            printf("[BmpManager] Sea level pressure parameter updated - no reconfiguration needed\n");
+            // printf("[BmpManager] Sea level pressure parameter updated - no reconfiguration needed\n");
             break;
         }
         default:
-            printf("[BmpManager] ERROR: Unknown parameter ID %d\n", static_cast<int>(id));
+            // printf("[BmpManager] ERROR: Unknown parameter ID %d\n", static_cast<int>(id));
             FW_ASSERT(0, static_cast<FwAssertArgType>(id));
             break;
     }
 }
 
 void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
-    printf("[BmpManager] run_handler called, current state: %d\n", static_cast<int>(m_state));
+    // printf("[BmpManager] run_handler called, current state: %d\n", static_cast<int>(m_state));
     
     switch (this->m_state) {
         case RESET:
-            printf("[BmpManager] RESET state: attempt %d\n", m_resetAttempts);
+            // printf("[BmpManager] RESET state: attempt %d\n", m_resetAttempts);
             // If reset is successful, move to STARTUP_DELAY state
             if (this->reset()) {
-                printf("[BmpManager] Reset command sent successfully, waiting for startup delay\n");
+                // printf("[BmpManager] Reset command sent successfully, waiting for startup delay\n");
                 this->m_state = STARTUP_DELAY;
                 this->m_startupCounter = STARTUP_DELAY_CYCLES;
             } else {
-                printf("[BmpManager] Reset command failed\n");
+                // printf("[BmpManager] Reset command failed\n");
                 m_resetAttempts++;
                 if (m_resetAttempts > MAX_RESET_ATTEMPTS) {
-                    printf("[BmpManager] ERROR: Maximum reset attempts exceeded\n");
+                    // printf("[BmpManager] ERROR: Maximum reset attempts exceeded\n");
                     // Stay in RESET state but log error
                     m_resetAttempts = 0;
                 }
@@ -82,63 +82,63 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
             break;
             
         case STARTUP_DELAY:
-            printf("[BmpManager] STARTUP_DELAY state: %d cycles remaining\n", m_startupCounter);
+            // printf("[BmpManager] STARTUP_DELAY state: %d cycles remaining\n", m_startupCounter);
             m_startupCounter--;
             if (m_startupCounter <= 0) {
-                printf("[BmpManager] Startup delay complete, transitioning to CHIP_ID_CHECK\n");
+                // printf("[BmpManager] Startup delay complete, transitioning to CHIP_ID_CHECK\n");
                 this->m_state = CHIP_ID_CHECK;
             }
             break;
             
         case CHIP_ID_CHECK: {
-            printf("[BmpManager] CHIP_ID_CHECK state\n");
+            // printf("[BmpManager] CHIP_ID_CHECK state\n");
             U8 chip_id = 0;
             if (this->read_chip_id(chip_id)) {
-                printf("[BmpManager] Chip ID read successfully: 0x%02X\n", chip_id);
+                // printf("[BmpManager] Chip ID read successfully: 0x%02X\n", chip_id);
                 if (chip_id == CHIP_ID_VALUE) {
-                    printf("[BmpManager] Chip ID matches expected value (0x%02X), transitioning to CALIBRATION_READ\n", CHIP_ID_VALUE);
+                    // printf("[BmpManager] Chip ID matches expected value (0x%02X), transitioning to CALIBRATION_READ\n", CHIP_ID_VALUE);
                     this->m_state = CALIBRATION_READ;
                 } else {
-                    printf("[BmpManager] ERROR: Chip ID mismatch. Expected 0x%02X, got 0x%02X. Resetting.\n", CHIP_ID_VALUE, chip_id);
+                    // printf("[BmpManager] ERROR: Chip ID mismatch. Expected 0x%02X, got 0x%02X. Resetting.\n", CHIP_ID_VALUE, chip_id);
                     this->m_state = RESET;
                     m_resetAttempts = 0;
                 }
             } else {
-                printf("[BmpManager] ERROR: Failed to read chip ID. Resetting.\n");
+                // printf("[BmpManager] ERROR: Failed to read chip ID. Resetting.\n");
                 this->m_state = RESET;
                 m_resetAttempts = 0;
             }
             break;
         }
         case CALIBRATION_READ:
-            printf("[BmpManager] CALIBRATION_READ state\n");
+            //  printf("[BmpManager] CALIBRATION_READ state\n");
             if (this->read_calibration_data()) {
-                printf("[BmpManager] Calibration data read successfully, transitioning to CONFIGURE\n");
+                // printf("[BmpManager] Calibration data read successfully, transitioning to CONFIGURE\n");
                 this->m_state = CONFIGURE;
             } else {
-                printf("[BmpManager] ERROR: Failed to read calibration data. Resetting.\n");
+                // printf("[BmpManager] ERROR: Failed to read calibration data. Resetting.\n");
                 this->m_state = RESET;
                 m_resetAttempts = 0;
             }
             break;
         case CONFIGURE:
-            printf("[BmpManager] CONFIGURE state\n");
+            // printf("[BmpManager] CONFIGURE state\n");
             if (this->configure_device()) {
-                printf("[BmpManager] Device configured successfully, transitioning to RUNNING\n");
+                // printf("[BmpManager] Device configured successfully, transitioning to RUNNING\n");
                 this->m_state = RUNNING;
             } else {
-                printf("[BmpManager] ERROR: Failed to configure device. Resetting.\n");
+                // printf("[BmpManager] ERROR: Failed to configure device. Resetting.\n");
                 this->m_state = RESET;
                 m_resetAttempts = 0;
             }
             break;
         case RUNNING: {
-            printf("[BmpManager] RUNNING state\n");
+            // printf("[BmpManager] RUNNING state\n");
             
             // Step 1: Check if measurement is ready
             U8 status = 0;
             if (!this->read_status(status)) {
-                printf("[BmpManager] ERROR: Failed to read status register. Resetting.\n");
+                // printf("[BmpManager] ERROR: Failed to read status register. Resetting.\n");
                 this->m_state = RESET;
                 m_resetAttempts = 0;
                 break;
@@ -146,13 +146,13 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
             
             // Check if measurement is in progress (bit 3) or if data is being updated (bit 0)
             if ((status & 0x08) || (status & 0x01)) {
-                printf("[BmpManager] Measurement in progress (status=0x%02X), waiting...\n", status);
+                // printf("[BmpManager] Measurement in progress (status=0x%02X), waiting...\n", status);
                 break; // Wait for next cycle
             }
             
             // Step 2: Trigger a new measurement in forced mode
             if (!this->trigger_measurement()) {
-                printf("[BmpManager] ERROR: Failed to trigger measurement. Resetting.\n");
+                // printf("[BmpManager] ERROR: Failed to trigger measurement. Resetting.\n");
                 this->m_state = RESET;
                 m_resetAttempts = 0;
                 break;
@@ -170,7 +170,7 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
             Fw::Buffer readBuffer(spiData, MEASUREMENT_DATA_LENGTH + 1);
             
             if (this->spi_transfer(writeBuffer, readBuffer)) {
-                printf("[BmpManager] Raw measurement data read successfully\n");
+                // printf("[BmpManager] Raw measurement data read successfully\n");
                 
                 // Create buffer pointing to actual data (skip first byte which is register echo)
                 Fw::Buffer dataBuffer(&readBuffer.getData()[1], MEASUREMENT_DATA_LENGTH);
@@ -194,7 +194,7 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
             break;
         }
         default:
-            printf("[BmpManager] ERROR: Unknown state %d\n", static_cast<int>(m_state));
+            // printf("[BmpManager] ERROR: Unknown state %d\n", static_cast<int>(m_state));
             FW_ASSERT(0, this->m_state);
             break;
     }
@@ -205,18 +205,18 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
 // ----------------------------------------------------------------------
 
 bool BmpManager ::reset() {
-    printf("[BmpManager] Sending reset command (0x%02X -> 0x%02X)\n", RESET_REGISTER, RESET_VALUE);
+    // printf("[BmpManager] Sending reset command (0x%02X -> 0x%02X)\n", RESET_REGISTER, RESET_VALUE);
     // For SPI writes, register address MSB must be 0
     U8 reset_sequence[] = {RESET_REGISTER & 0x7F, RESET_VALUE}; // Clear MSB for write
     Fw::Buffer writeBuffer(reset_sequence, sizeof(reset_sequence));
     Fw::Buffer readBuffer;
     bool success = this->spi_transfer(writeBuffer, readBuffer);
-    printf("[BmpManager] Reset command %s\n", success ? "succeeded" : "failed");
+    // printf("[BmpManager] Reset command %s\n", success ? "succeeded" : "failed");
     return success;
 }
 
 bool BmpManager ::read_chip_id(U8& id) {
-    printf("[BmpManager] Reading chip ID from register 0x%02X\n", CHIP_ID_REGISTER);
+    // printf("[BmpManager] Reading chip ID from register 0x%02X\n", CHIP_ID_REGISTER);
     
     // BMP280 SPI protocol: for reads, MSB must be 1, and we need a 2-byte transaction
     // Byte 0: Register address with MSB=1 (0xD0 | 0x80 = 0xD0, already has MSB set)
@@ -231,16 +231,16 @@ bool BmpManager ::read_chip_id(U8& id) {
     if (success) {
         // The chip ID will be in the second byte of the response
         id = readBuffer.getData()[1];
-        printf("[BmpManager] Chip ID read: 0x%02X\n", id);
+        // printf("[BmpManager] Chip ID read: 0x%02X\n", id);
     } else {
-        printf("[BmpManager] Failed to read chip ID\n");
+        // printf("[BmpManager] Failed to read chip ID\n");
         id = 0;
     }
     return success;
 }
 
 bool BmpManager ::read_status(U8& status) {
-    printf("[BmpManager] Reading status from register 0x%02X\n", STATUS_REGISTER);
+    // printf("[BmpManager] Reading status from register 0x%02X\n", STATUS_REGISTER);
     
     // BMP280 SPI protocol: 2-byte transaction for register read
     U8 spiData[2] = {STATUS_REGISTER | 0x80, 0x00}; // Ensure MSB is set for read
@@ -252,9 +252,9 @@ bool BmpManager ::read_status(U8& status) {
     
     if (success) {
         status = readBuffer.getData()[1];
-        printf("[BmpManager] Status read: 0x%02X\n", status);
+        // printf("[BmpManager] Status read: 0x%02X\n", status);
     } else {
-        printf("[BmpManager] Failed to read status\n");
+        // printf("[BmpManager] Failed to read status\n");
         status = 0;
     }
     
@@ -262,8 +262,8 @@ bool BmpManager ::read_status(U8& status) {
 }
 
 bool BmpManager ::read_calibration_data() {
-    printf("[BmpManager] Reading calibration data from register 0x%02X, length %d bytes\n", 
-           CALIB_DATA_REGISTER, CALIB_DATA_LENGTH);
+    // printf("[BmpManager] Reading calibration data from register 0x%02X, length %d bytes\n", 
+    //        CALIB_DATA_REGISTER, CALIB_DATA_LENGTH);
     
     // BMP280 SPI protocol: for multi-byte read, send register address + read 24 bytes
     // Total transaction: 1 byte register address + 24 bytes data = 25 bytes
@@ -277,7 +277,7 @@ bool BmpManager ::read_calibration_data() {
     Fw::Buffer readBuffer(spiData, CALIB_DATA_LENGTH + 1);
     
     if (this->spi_transfer(writeBuffer, readBuffer)) {
-        printf("[BmpManager] Calibration data read successfully, parsing coefficients\n");
+        // printf("[BmpManager] Calibration data read successfully, parsing coefficients\n");
         
         // Parse calibration data from the buffer (skip first byte which is the register echo)
         // Registers 0x88-0x9F contain 12 calibration coefficients (24 bytes)
@@ -297,11 +297,11 @@ bool BmpManager ::read_calibration_data() {
         m_calibration.dig_P8 = (static_cast<I16>(data[21]) << 8) | data[20];
         m_calibration.dig_P9 = (static_cast<I16>(data[23]) << 8) | data[22];
         
-        printf("[BmpManager] Calibration coefficients:\n");
-        printf("  dig_T1=%u, dig_T2=%d, dig_T3=%d\n", m_calibration.dig_T1, m_calibration.dig_T2, m_calibration.dig_T3);
-        printf("  dig_P1=%u, dig_P2=%d, dig_P3=%d\n", m_calibration.dig_P1, m_calibration.dig_P2, m_calibration.dig_P3);
-        printf("  dig_P4=%d, dig_P5=%d, dig_P6=%d\n", m_calibration.dig_P4, m_calibration.dig_P5, m_calibration.dig_P6);
-        printf("  dig_P7=%d, dig_P8=%d, dig_P9=%d\n", m_calibration.dig_P7, m_calibration.dig_P8, m_calibration.dig_P9);
+        // printf("[BmpManager] Calibration coefficients:\n");
+        // printf("  dig_T1=%u, dig_T2=%d, dig_T3=%d\n", m_calibration.dig_T1, m_calibration.dig_T2, m_calibration.dig_T3);
+        // printf("  dig_P1=%u, dig_P2=%d, dig_P3=%d\n", m_calibration.dig_P1, m_calibration.dig_P2, m_calibration.dig_P3);
+        // printf("  dig_P4=%d, dig_P5=%d, dig_P6=%d\n", m_calibration.dig_P4, m_calibration.dig_P5, m_calibration.dig_P6);
+        // printf("  dig_P7=%d, dig_P8=%d, dig_P9=%d\n", m_calibration.dig_P7, m_calibration.dig_P8, m_calibration.dig_P9);
         
         return true;
     }
@@ -310,7 +310,7 @@ bool BmpManager ::read_calibration_data() {
 }
 
 bool BmpManager ::configure_device() {
-    printf("[BmpManager] Configuring device\n");
+    // printf("[BmpManager] Configuring device\n");
     Fw::ParamValid paramValid;
     const PressureOversampling pressureOversampling = this->paramGet_PRESSURE_OVERSAMPLING(paramValid);
     FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
@@ -325,7 +325,7 @@ bool BmpManager ::configure_device() {
                          (static_cast<U8>(pressureOversampling) << 2) | 
                          0x00; // Start in sleep mode first
     
-    printf("[BmpManager] Setting CTRL_MEAS register to 0x%02X (temp_os=%d, press_os=%d, mode=sleep)\n", 
+    //printf("[BmpManager] Setting CTRL_MEAS register to 0x%02X (temp_os=%d, press_os=%d, mode=sleep)\n", 
            ctrl_meas_value, static_cast<int>(temperatureOversampling.e), static_cast<int>(pressureOversampling.e));
     
     // For SPI writes, register address MSB must be 0
@@ -345,16 +345,16 @@ bool BmpManager ::configure_device() {
         Fw::Buffer configWriteBuffer(config_sequence, sizeof(config_sequence));
         Fw::Buffer configReadBuffer;
         
-        printf("[BmpManager] Setting CONFIG register to 0x%02X\n", config_value);
+        // printf("[BmpManager] Setting CONFIG register to 0x%02X\n", config_value);
         success = this->spi_transfer(configWriteBuffer, configReadBuffer);
     }
     
-    printf("[BmpManager] Device configuration %s\n", success ? "succeeded" : "failed");
+    // printf("[BmpManager] Device configuration %s\n", success ? "succeeded" : "failed");
     return success;
 }
 
 bool BmpManager ::trigger_measurement() {
-    printf("[BmpManager] Triggering measurement in forced mode\n");
+    // printf("[BmpManager] Triggering measurement in forced mode\n");
     Fw::ParamValid paramValid;
     const PressureOversampling pressureOversampling = this->paramGet_PRESSURE_OVERSAMPLING(paramValid);
     FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
@@ -374,29 +374,29 @@ bool BmpManager ::trigger_measurement() {
 }
 
 bool BmpManager ::spi_transfer(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) {
-    printf("[BmpManager] SPI transfer: writing %d bytes, reading %d bytes\n", 
-           writeBuffer.getSize(), readBuffer.getSize());
+    // printf("[BmpManager] SPI transfer: writing %d bytes, reading %d bytes\n", 
+    //        writeBuffer.getSize(), readBuffer.getSize());
     
     // Print write data for debugging
     if (writeBuffer.getSize() > 0) {
-        printf("[BmpManager] Write data: ");
+        // printf("[BmpManager] Write data: ");
         for (U32 i = 0; i < writeBuffer.getSize(); i++) {
-            printf("0x%02X ", writeBuffer.getData()[i]);
+            // printf("0x%02X ", writeBuffer.getData()[i]);
         }
-        printf("\n");
+        // printf("\n");
     }
     
     // Perform the SPI transfer
     this->spiReadWrite_out(0, writeBuffer, readBuffer);
     
     // Print read data for debugging
-    if (readBuffer.getSize() > 0) {
-        printf("[BmpManager] Read data: ");
-        for (U32 i = 0; i < readBuffer.getSize(); i++) {
-            printf("0x%02X ", readBuffer.getData()[i]);
-        }
-        printf("\n");
-    }
+    // if (readBuffer.getSize() > 0) {
+    //     printf("[BmpManager] Read data: ");
+    //     for (U32 i = 0; i < readBuffer.getSize(); i++) {
+    //         printf("0x%02X ", readBuffer.getData()[i]);
+    //     }
+    //     printf("\n");
+    // }
     
     // TODO: In a real implementation, we should check for SPI errors
     // For now, we assume success but this is where error detection should be added
@@ -464,8 +464,8 @@ Bmp280Data BmpManager ::convert_raw_data(const RawBmpData& raw, const Calibratio
     // Calculate altitude using barometric formula
     F32 altitude = calculate_altitude(pressure, seaLevelPressure);
     
-    printf("[BmpManager] Temperature compensation: raw=%u -> %.2f°C (t_fine=%d)\n", raw.temperature, temperature, t_fine);
-    printf("[BmpManager] Pressure compensation: raw=%u -> %.2f Pa\n", raw.pressure, pressure);
+    // printf("[BmpManager] Temperature compensation: raw=%u -> %.2f°C (t_fine=%d)\n", raw.temperature, temperature, t_fine);
+    // printf("[BmpManager] Pressure compensation: raw=%u -> %.2f Pa\n", raw.pressure, pressure);
     
     bmpData.setpressure(pressure);
     bmpData.settemperature(temperature);
@@ -486,16 +486,16 @@ F32 BmpManager ::calculate_altitude(F32 pressure, F32 seaLevelPressure) {
     // Barometric formula for altitude calculation
     // altitude = 44330 * (1 - (pressure / seaLevelPressure)^(1/5.255))
     
-    printf("[BmpManager] Calculating altitude: pressure=%.2f Pa, sea_level=%.2f Pa\n", pressure, seaLevelPressure);
+    // printf("[BmpManager] Calculating altitude: pressure=%.2f Pa, sea_level=%.2f Pa\n", pressure, seaLevelPressure);
     
     if (seaLevelPressure <= 0.0f || pressure <= 0.0f) {
-        printf("[BmpManager] ERROR: Invalid pressure values for altitude calculation\n");
+        // printf("[BmpManager] ERROR: Invalid pressure values for altitude calculation\n");
         return 0.0f;  // Return 0 for invalid inputs
     }
     
     F32 ratio = pressure / seaLevelPressure;
     if (ratio <= 0.0f) {
-        printf("[BmpManager] ERROR: Invalid pressure ratio for altitude calculation\n");
+        // printf("[BmpManager] ERROR: Invalid pressure ratio for altitude calculation\n");
         return 0.0f;
     }
     
@@ -505,7 +505,7 @@ F32 BmpManager ::calculate_altitude(F32 pressure, F32 seaLevelPressure) {
     
     F32 altitude = STANDARD_ALTITUDE_CONSTANT * (1.0f - pow(ratio, PRESSURE_EXPONENT));
     
-    printf("[BmpManager] Altitude calculated: %.2f m (ratio=%.4f)\n", altitude, ratio);
+    // printf("[BmpManager] Altitude calculated: %.2f m (ratio=%.4f)\n", altitude, ratio);
     
     return altitude;
 }
