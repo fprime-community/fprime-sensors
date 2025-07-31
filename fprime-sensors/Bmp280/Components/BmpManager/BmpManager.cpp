@@ -1,6 +1,6 @@
 // ======================================================================
 // \title  BmpManager.cpp
-// \author Generated
+// \author aborjigin & Generated
 // \brief  cpp file for BmpManager component implementation class
 // ======================================================================
 

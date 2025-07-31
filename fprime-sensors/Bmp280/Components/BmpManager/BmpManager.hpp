@@ -1,6 +1,6 @@
 // ======================================================================
 // \title  BmpManager.hpp
-// \author Generated
+// \author aborjigin & Generated
 // \brief  hpp file for BmpManager component implementation class
 // ======================================================================
 
