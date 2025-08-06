@@ -326,7 +326,7 @@ bool BmpManager ::configure_device() {
                          0x00; // Start in sleep mode first
     
     //printf("[BmpManager] Setting CTRL_MEAS register to 0x%02X (temp_os=%d, press_os=%d, mode=sleep)\n", 
-           ctrl_meas_value, static_cast<int>(temperatureOversampling.e), static_cast<int>(pressureOversampling.e));
+        //    ctrl_meas_value, static_cast<int>(temperatureOversampling.e), static_cast<int>(pressureOversampling.e));
     
     // For SPI writes, register address MSB must be 0
     U8 config_sequence[] = {CTRL_MEAS_REGISTER & 0x7F, ctrl_meas_value}; // Clear MSB for write
