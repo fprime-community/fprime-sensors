@@ -15,9 +15,6 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/BmpManager.fpp"
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/BmpManager.cpp"
-    # MOD_DEPS
-    #     fprime-sensors_Bmp280_Types
-    #     Drv_SpiDriverPorts
 )
 
 register_fprime_ut(
