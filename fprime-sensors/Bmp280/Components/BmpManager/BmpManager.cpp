@@ -58,7 +58,7 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
                 m_resetAttempts++;
                 this->log_WARNING_HI_DeviceResetFailed(m_resetAttempts);
                 if (m_resetAttempts > MAX_RESET_ATTEMPTS) {
-                    this->log_FATAL_DeviceFailure();
+                    this->log_WARNING_HI_DeviceFailure();
                     m_resetAttempts = 0;
                 }
             }
