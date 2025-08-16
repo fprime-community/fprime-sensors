@@ -24,7 +24,7 @@ class AccumulatorAdapter final : public AccumulatorAdapterComponentBase {
     //! Destroy AccumulatorAdapter object
     ~AccumulatorAdapter();
 
-  PRIVATE:
+  private:
     // ----------------------------------------------------------------------
     // Handler implementations for typed input ports
     // ----------------------------------------------------------------------
