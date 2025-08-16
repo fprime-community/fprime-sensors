@@ -1,6 +1,8 @@
 register_fprime_config(
     AUTOCODER_INPUTS
         "${CMAKE_CURRENT_LIST_DIR}/SubtopologyConfig.fpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/NmeaGpsSubtopologyConfig.hpp"
     DEPENDS
         Fw_Types
     EXCLUDE_FROM_ALL
