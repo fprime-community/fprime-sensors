@@ -74,7 +74,7 @@ void GpsManager ::dataIn_handler(FwIndexType portNum, Fw::Buffer& data) {
     }
     // Beidou, Galileo, GPS, and GLONASS messages
     else if (messageType == "GGA") {
-        this->parse_gga_message(messagePointer + 1 + sizeof(messagePointer), messageHeader);
+        this->parse_gga_message(messagePointer + 1 + sizeof(messageTypeBuffer), messageHeader);
     }
 
     // Always return the data
