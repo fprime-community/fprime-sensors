@@ -194,13 +194,13 @@ ImuData ImuManager ::convert_raw_data(const RawImuData& raw,
                                       const GyroscopeRange& gyroscopeRange) {
     // Set the values of the IMU data by multiplying by conversion factors
     MpuImu::ImuData imuData;
-    imuData.getacceleration().setx(static_cast<F32>(raw.acceleration[0]) * 1.0f / static_cast<F32>(accelerationRange));
-    imuData.getacceleration().sety(static_cast<F32>(raw.acceleration[1]) * 1.0f / static_cast<F32>(accelerationRange));
-    imuData.getacceleration().setz(static_cast<F32>(raw.acceleration[2]) * 1.0f / static_cast<F32>(accelerationRange));
-    imuData.settemperature((static_cast<F32>(raw.temperature) / TEMPERATURE_SCALAR) + TEMPERATURE_OFFSET);
-    imuData.getrotation().setx(static_cast<F32>(raw.gyroscope[0]) * 10.0f / static_cast<F32>(gyroscopeRange));
-    imuData.getrotation().sety(static_cast<F32>(raw.gyroscope[1]) * 10.0f / static_cast<F32>(gyroscopeRange));
-    imuData.getrotation().setz(static_cast<F32>(raw.gyroscope[2]) * 10.0f / static_cast<F32>(gyroscopeRange));
+    imuData.get_acceleration().set_x(static_cast<F32>(raw.acceleration[0]) * 1.0f / static_cast<F32>(accelerationRange));
+    imuData.get_acceleration().set_y(static_cast<F32>(raw.acceleration[1]) * 1.0f / static_cast<F32>(accelerationRange));
+    imuData.get_acceleration().set_z(static_cast<F32>(raw.acceleration[2]) * 1.0f / static_cast<F32>(accelerationRange));
+    imuData.set_temperature((static_cast<F32>(raw.temperature) / TEMPERATURE_SCALAR) + TEMPERATURE_OFFSET);
+    imuData.get_rotation().set_x(static_cast<F32>(raw.gyroscope[0]) * 10.0f / static_cast<F32>(gyroscopeRange));
+    imuData.get_rotation().set_y(static_cast<F32>(raw.gyroscope[1]) * 10.0f / static_cast<F32>(gyroscopeRange));
+    imuData.get_rotation().set_z(static_cast<F32>(raw.gyroscope[2]) * 10.0f / static_cast<F32>(gyroscopeRange));
     return imuData;
 }
 

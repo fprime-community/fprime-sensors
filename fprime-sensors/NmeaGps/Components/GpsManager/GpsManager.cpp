@@ -47,9 +47,9 @@ void GpsManager ::parse_gga_message(const char* data, Fw::StringBase& messageHea
     }
     // Perform conversion
     else {
-        reading.setlatitude(this->ddmmmmmm_to_degrees(gga.latitude, gga.latitudeDirection));
-        reading.setlongitude(this->ddmmmmmm_to_degrees(gga.longitude, gga.longitudeDirection));
-        reading.setaltitude(gga.altitude * ((gga.altitudeUnits == 'F') ? 0.3048 : 1.0)); // Convert to meters if in feet
+        reading.set_latitude(this->ddmmmmmm_to_degrees(gga.latitude, gga.latitudeDirection));
+        reading.set_longitude(this->ddmmmmmm_to_degrees(gga.longitude, gga.longitudeDirection));
+        reading.set_altitude(gga.altitude * ((gga.altitudeUnits == 'F') ? 0.3048 : 1.0)); // Convert to meters if in feet
         this->tlmWrite_Reading(reading);
     }
 }
