@@ -5,9 +5,7 @@
 // ======================================================================
 #ifndef MpuImu_MpuImuSubtopologyConfig_hpp
 #define MpuImu_MpuImuSubtopologyConfig_hpp
-#include <zephyr/drivers/i2c.h>
-#undef EMPTY
 
-using ImuDevice = struct i2c_dt_spec;
+using ImuDevice = const char*;
 
 #endif // MpuImu_MpuImuSubtopologyConfig_hpp
