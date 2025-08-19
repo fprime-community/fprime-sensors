@@ -4,4 +4,6 @@ register_fprime_config(
     DEPENDS
         Fw_Types
     EXCLUDE_FROM_ALL
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/MpuImuSubtopologyConfig.hpp"
 )
