@@ -12,7 +12,8 @@ namespace Bmp280 {
 // Construction and destruction
 // ----------------------------------------------------------------------
 
-BmpManagerTester ::BmpManagerTester() : BmpManagerGTestBase("BmpManagerTester", BmpManagerTester::MAX_HISTORY_SIZE), component("BmpManager") {
+BmpManagerTester ::BmpManagerTester()
+    : BmpManagerGTestBase("BmpManagerTester", BmpManagerTester::MAX_HISTORY_SIZE), component("BmpManager") {
     this->initComponents();
     this->connectPorts();
 }
@@ -26,11 +27,11 @@ BmpManagerTester ::~BmpManagerTester() {}
 void BmpManagerTester ::test_nominal() {
     // Test nominal operation
     this->invoke_to_run(0, 0);
-    
+
     // Verify telemetry was sent
     ASSERT_TLM_SIZE(1);
     ASSERT_TLM_Reading_SIZE(1);
-    
+
     // Verify no events were emitted
     ASSERT_EVENTS_SIZE(0);
 }
@@ -38,7 +39,7 @@ void BmpManagerTester ::test_nominal() {
 void BmpManagerTester ::test_error() {
     // Test error cases
     this->invoke_to_run(0, 0);
-    
+
     // Verify error event was emitted
     ASSERT_EVENTS_SIZE(1);
     ASSERT_EVENTS_I2cError_SIZE(1);
@@ -49,15 +50,13 @@ void BmpManagerTester ::test_error() {
 // ----------------------------------------------------------------------
 
 void BmpManagerTester ::from_busWriteRead_handler(FwIndexType portNum,
-                                                   U32 addr,
-                                                   Fw::Buffer& writeBuffer,
-                                                   Fw::Buffer& readBuffer) {
+                                                  U32 addr,
+                                                  Fw::Buffer& writeBuffer,
+                                                  Fw::Buffer& readBuffer) {
     this->pushFromPortEntry_busWriteRead(addr, writeBuffer, readBuffer);
 }
 
-void BmpManagerTester ::from_busWrite_handler(FwIndexType portNum,
-                                               U32 addr,
-                                               Fw::Buffer& writeBuffer) {
+void BmpManagerTester ::from_busWrite_handler(FwIndexType portNum, U32 addr, Fw::Buffer& writeBuffer) {
     this->pushFromPortEntry_busWrite(addr, writeBuffer);
 }
 
@@ -77,7 +76,7 @@ void BmpManagerTester ::connectPorts() {
     this->connect_to_tlmOut(0, this->component.get_tlmOut_OutputPort(0));
     this->connect_to_PrmGet(0, this->component.get_PrmGet_OutputPort(0));
     this->connect_to_PrmSet(0, this->component.get_PrmSet_OutputPort(0));
-    
+
     this->component.set_busWriteRead_OutputPort(0, this->get_from_busWriteRead(0));
     this->component.set_busWrite_OutputPort(0, this->get_from_busWrite(0));
 }
@@ -87,4 +86,4 @@ void BmpManagerTester ::initComponents() {
     this->component.init(BmpManagerTester::TEST_INSTANCE_QUEUE_DEPTH, BmpManagerTester::TEST_INSTANCE_ID);
 }
 
-}  // namespace Bmp280 
+}  // namespace Bmp280

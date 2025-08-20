@@ -18,7 +18,7 @@ class BmpManager final : public BmpManagerComponentBase {
     static constexpr U8 CTRL_MEAS_REGISTER = 0xF4;
     static constexpr U8 CONFIG_REGISTER = 0xF5;
     static constexpr U8 PRESSURE_MSB_REGISTER = 0xF7;
-    static constexpr U8 DEVICE_SELECT = 0; // SPI chip select
+    static constexpr U8 DEVICE_SELECT = 0;  // SPI chip select
     static constexpr U8 RESET_REGISTER = 0xE0;
     static constexpr U8 RESET_VALUE = 0xB6;
     static constexpr U8 STATUS_REGISTER = 0xF3;
@@ -60,9 +60,7 @@ class BmpManager final : public BmpManagerComponentBase {
     ~BmpManager();
 
     //! Converts raw BMP280 data to the telemetry structure
-    static Bmp280Data convert_raw_data(const RawBmpData& raw,
-                                       const CalibrationData& calib,
-                                       F32 seaLevelPressure);
+    static Bmp280Data convert_raw_data(const RawBmpData& raw, const CalibrationData& calib, F32 seaLevelPressure);
 
     //! Calculates altitude from pressure using barometric formula
     static F32 calculate_altitude(F32 pressure, F32 seaLevelPressure);
@@ -108,7 +106,7 @@ class BmpManager final : public BmpManagerComponentBase {
 
     //! Configure the BMP280
     bool configure_device();
-    
+
     //! Trigger a measurement in forced mode
     bool trigger_measurement();
 
@@ -123,20 +121,20 @@ class BmpManager final : public BmpManagerComponentBase {
 
     //! Tracks the state of the BMP280
     BmpState m_state;
-    
+
     //! Startup delay counter
     U32 m_startupCounter;
 
     //! Calibration data
     CalibrationData m_calibration;
-    
+
     //! Maximum number of reset attempts before giving up
     static constexpr U32 MAX_RESET_ATTEMPTS = 5;
-    
+
     //! Number of cycles to wait after reset for device startup (approximately 2ms at typical scheduling rates)
     static constexpr U32 STARTUP_DELAY_CYCLES = 2;
 };
 
 }  // namespace Bmp280
 
-#endif 
+#endif

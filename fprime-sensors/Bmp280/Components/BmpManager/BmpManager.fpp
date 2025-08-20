@@ -19,11 +19,6 @@ module Bmp280 {
             newOversampling: TemperatureOversampling
         ) severity activity high format "Temperature oversampling updated to {}"
 
-        event SpiError(
-            device: U32,
-            error: U32
-        ) severity warning high format "SPI error on device {} with error code {}" throttle 5
-
         event DeviceFailure() severity warning high format "BMP280 Device failure" throttle 5
 
         event ChipIdCheckFailure() severity warning high format "BMP280 Chip ID check failure" throttle 5
@@ -34,7 +29,7 @@ module Bmp280 {
 
         event MeasurementTriggerFailure() severity warning high format "BMP280 Measurement Trigger failure" throttle 5
 
-        event SpiTransferFailure() severity warning high format "BMP280 SPI Transfer failure" throttle 5
+        event DeviceReadFailure() severity warning high format "BMP280 Device Measurement Read failure" throttle 5
 
         @ Parameter for setting the pressure oversampling
         param PRESSURE_OVERSAMPLING: PressureOversampling default PressureOversampling.OVERSAMPLE_1X

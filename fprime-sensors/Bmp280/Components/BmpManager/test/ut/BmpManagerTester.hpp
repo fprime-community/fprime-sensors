@@ -7,8 +7,8 @@
 #ifndef Bmp280_BmpManagerTester_HPP
 #define Bmp280_BmpManagerTester_HPP
 
-#include "fprime-sensors/Bmp280/Components/BmpManager/BmpManagerGTestBase.hpp"
 #include "fprime-sensors/Bmp280/Components/BmpManager/BmpManager.hpp"
+#include "fprime-sensors/Bmp280/Components/BmpManager/BmpManagerGTestBase.hpp"
 
 namespace Bmp280 {
 
@@ -41,15 +41,10 @@ class BmpManagerTester : public BmpManagerGTestBase {
     // ----------------------------------------------------------------------
 
     //! Handler for from_busWriteRead
-    void from_busWriteRead_handler(FwIndexType portNum,
-                                   U32 addr,
-                                   Fw::Buffer& writeBuffer,
-                                   Fw::Buffer& readBuffer);
+    void from_busWriteRead_handler(FwIndexType portNum, U32 addr, Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer);
 
     //! Handler for from_busWrite
-    void from_busWrite_handler(FwIndexType portNum,
-                               U32 addr,
-                               Fw::Buffer& writeBuffer);
+    void from_busWrite_handler(FwIndexType portNum, U32 addr, Fw::Buffer& writeBuffer);
 
   private:
     // ----------------------------------------------------------------------
@@ -73,4 +68,4 @@ class BmpManagerTester : public BmpManagerGTestBase {
 
 }  // namespace Bmp280
 
-#endif 
+#endif
