@@ -13,7 +13,7 @@ namespace Bmp280 {
 // Component construction and destruction
 // ----------------------------------------------------------------------
 
-BmpManager ::BmpManager(const char* const compName) : BmpManagerComponentBase(compName), m_state(RESET), m_resetAttempts(0) {}
+BmpManager ::BmpManager(const char* const compName) : BmpManagerComponentBase(compName), m_state(RESET) {}
 
 BmpManager ::~BmpManager() {}
 
@@ -55,18 +55,13 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
                 this->m_state = STARTUP_DELAY;
                 this->m_startupCounter = STARTUP_DELAY_CYCLES;
             } else {
-                m_resetAttempts++;
-                this->log_WARNING_HI_DeviceResetFailed(m_resetAttempts);
-                if (m_resetAttempts > MAX_RESET_ATTEMPTS) {
-                    this->log_WARNING_HI_DeviceFailure();
-                    m_resetAttempts = 0;
-                }
+                this->log_WARNING_HI_DeviceFailure();
             }
             break;
             
         case STARTUP_DELAY:
-            m_startupCounter--;
-            if (m_startupCounter <= 0) {
+            this->m_startupCounter--;
+            if (this->m_startupCounter <= 0) {
                 this->m_state = CHIP_ID_CHECK;
             }
             break;
@@ -78,11 +73,11 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
                     this->m_state = CALIBRATION_READ;
                 } else {
                     this->m_state = RESET;
-                    m_resetAttempts = 0;
+                    this->log_WARNING_HI_ChipIdCheckFailure();
                 }
             } else {
                 this->m_state = RESET;
-                m_resetAttempts = 0;
+                this->log_WARNING_HI_ChipIdCheckFailure();
             }
             break;
         }
@@ -91,7 +86,7 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
                 this->m_state = CONFIGURE;
             } else {
                 this->m_state = RESET;
-                m_resetAttempts = 0;
+                this->log_WARNING_HI_CalibrationFailure();
             }
             break;
         case CONFIGURE:
@@ -99,16 +94,24 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
                 this->m_state = RUNNING;
             } else {
                 this->m_state = RESET;
-                m_resetAttempts = 0;
+                this->log_WARNING_HI_DeviceConfigureFailure();
             }
             break;
         case RUNNING: {
+            // Reset throttles for logged events
+            this->log_WARNING_HI_DeviceFailure_ThrottleClear(); // Clear throttle for Device Failure event
+            this->log_WARNING_HI_ChipIdCheckFailure_ThrottleClear(); // Clear throttle for Chip ID Check Failure event
+            this->log_WARNING_HI_CalibrationFailure_ThrottleClear(); // Clear throttle for Data Calibration Failure event
+            this->log_WARNING_HI_DeviceConfigureFailure_ThrottleClear(); // Clear throttle for Device Configure Failure  event
+            this->log_WARNING_HI_MeasurementTriggerFailure_ThrottleClear(); // Clear throttle for Measurement Trigger Failure event
+            this->log_WARNING_HI_SpiTransferFailure_ThrottleClear(); // Clear throttle for SPI Transfer Failure event
+
+
             
             // Step 1: Check if measurement is ready
             U8 status = 0;
             if (!this->read_status(status)) {
                 this->m_state = RESET;
-                m_resetAttempts = 0;
                 break;
             }
             
@@ -120,7 +123,7 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
             // Step 2: Trigger a new measurement in forced mode
             if (!this->trigger_measurement()) {
                 this->m_state = RESET;
-                m_resetAttempts = 0;
+                this->log_WARNING_HI_MeasurementTriggerFailure();
                 break;
             }
             
@@ -145,13 +148,11 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
                 FW_ASSERT(paramValid != Fw::ParamValid::INVALID, static_cast<FwAssertArgType>(paramValid));
                 
                 const Bmp280Data bmpData = this->convert_raw_data(raw, this->m_calibration, seaLevelPressure);
-                printf("[BmpManager] Converted data - Pressure: %.2f Pa, Temperature: %.2f C, Altitude: %.2f m\n", 
-                       bmpData.getpressure(), bmpData.gettemperature(), bmpData.getaltitude());
+
                 this->tlmWrite_Reading(bmpData);
             } else {
-                printf("[BmpManager] ERROR: Failed to read measurement data. Resetting.\n");
                 this->m_state = RESET;
-                m_resetAttempts = 0;
+                this->log_WARNING_HI_SpiTransferFailure();
             }
             break;
         }
@@ -272,7 +273,7 @@ bool BmpManager ::configure_device() {
         success = this->spi_transfer(configWriteBuffer, configReadBuffer);
     }
     
-    return success;
+    return success; 
 }
 
 bool BmpManager ::trigger_measurement() {
@@ -296,15 +297,11 @@ bool BmpManager ::trigger_measurement() {
 
 bool BmpManager ::spi_transfer(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) {
     // Validate buffer sizes
-    if (writeBuffer.getSize() == 0) {
-        this->log_WARNING_HI_SpiError(0, 1); // device=0, error=1 for empty buffer
-        return false;
-    }
-    
-    if (readBuffer.getSize() > 0 && readBuffer.getSize() != writeBuffer.getSize()) {
-        this->log_WARNING_HI_SpiError(0, 2); // device=0, error=2 for size mismatch  
-        return false;
-    }
+    FW_ASSERT(writeBuffer.getSize() == 0); 
+
+    FW_ASSERT(readBuffer.getSize() == 0); 
+
+    FW_ASSERT(writeBuffer.getSize() == readBuffer.getSize()); 
     
     // Perform the SPI transfer
     // Note: spiReadWrite_out calls the underlying SPI driver

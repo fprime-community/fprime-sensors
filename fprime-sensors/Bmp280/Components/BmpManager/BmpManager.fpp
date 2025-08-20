@@ -24,13 +24,17 @@ module Bmp280 {
             error: U32
         ) severity warning high format "SPI error on device {} with error code {}" throttle 5
 
-        event DeviceResetFailed(
-            attempts: U32
-        ) severity warning high format "BMP280 Device reset failed {} times" throttle 5
+        event DeviceFailure() severity warning high format "BMP280 Device failure" throttle 5
 
-        event DeviceFailure(
-            
-        ) severity warning high format "BMP280 Device failure" throttle 5
+        event ChipIdCheckFailure() severity warning high format "BMP280 Chip ID check failure" throttle 5
+
+        event CalibrationFailure() severity warning high format "BMP280 Calibration Read failure" throttle 5
+
+        event DeviceConfigureFailure() severity warning high format "BMP280 Configure failure" throttle 5 
+
+        event MeasurementTriggerFailure() severity warning high format "BMP280 Measurement Trigger failure" throttle 5
+
+        event SpiTransferFailure() severity warning high format "BMP280 SPI Transfer failure" throttle 5
 
         @ Parameter for setting the pressure oversampling
         param PRESSURE_OVERSAMPLING: PressureOversampling default PressureOversampling.OVERSAMPLE_1X

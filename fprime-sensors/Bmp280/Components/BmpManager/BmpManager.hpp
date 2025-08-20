@@ -123,9 +123,6 @@ class BmpManager final : public BmpManagerComponentBase {
 
     //! Tracks the state of the BMP280
     BmpState m_state;
-
-    //! Reset attempt counter
-    U32 m_resetAttempts;
     
     //! Startup delay counter
     U32 m_startupCounter;
