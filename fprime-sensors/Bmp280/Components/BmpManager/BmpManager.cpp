@@ -68,7 +68,8 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
 
         case CHIP_ID_CHECK: {
             U8 chip_id = 0;
-            if (this->read_chip_id(chip_id) && chip_id == CHIP_ID_VALUE) {
+            bool success = this->read_chip_id(chip_id); 
+            if (success && chip_id == CHIP_ID_VALUE) {
                 this->m_state = CALIBRATION_READ;
             } else {
                 this->m_state = RESET;
@@ -165,7 +166,7 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
 bool BmpManager ::reset() {
     U8 reset_sequence[] = {RESET_REGISTER & 0x7F, RESET_VALUE};  // Clear MSB for write
     Fw::Buffer writeBuffer(reset_sequence, sizeof(reset_sequence));
-    Fw::Buffer readBuffer;
+    Fw::Buffer readBuffer(reset_sequence, sizeof(reset_sequence));
     bool success = this->spi_transfer(writeBuffer, readBuffer);
     return success;
 }
@@ -287,9 +288,9 @@ bool BmpManager ::trigger_measurement() {
 
 bool BmpManager ::spi_transfer(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) {
     // Validate buffer sizes
-    FW_ASSERT(writeBuffer.getSize() == 0);
+    FW_ASSERT(writeBuffer.getSize() != 0);
 
-    FW_ASSERT(readBuffer.getSize() == 0);
+    FW_ASSERT(readBuffer.getSize() != 0);
 
     FW_ASSERT(writeBuffer.getSize() == readBuffer.getSize());
 
