@@ -282,7 +282,7 @@ bool BmpManager ::trigger_measurement() {
     // For SPI writes, register address MSB must be 0
     U8 config_sequence[] = {CTRL_MEAS_REGISTER & 0x7F, ctrl_meas_value};  // Clear MSB for write
     Fw::Buffer writeBuffer(config_sequence, sizeof(config_sequence));
-    Fw::Buffer readBuffer;
+    Fw::Buffer readBuffer(config_sequence, sizeof(config_sequence));
     return this->spi_transfer(writeBuffer, readBuffer);
 }
 
