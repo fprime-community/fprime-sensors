@@ -364,9 +364,9 @@ Bmp280Data BmpManager ::convert_raw_data(const RawBmpData& raw, const Calibratio
     // Calculate altitude using barometric formula
     F32 altitude = calculate_altitude(pressure, seaLevelPressure);
 
-    bmpData.setpressure(pressure);
-    bmpData.settemperature(temperature);
-    bmpData.setaltitude(altitude);
+    bmpData.set_pressure(pressure);
+    bmpData.set_temperature(temperature);
+    bmpData.set_altitude(altitude);
 
     return bmpData;
 }
