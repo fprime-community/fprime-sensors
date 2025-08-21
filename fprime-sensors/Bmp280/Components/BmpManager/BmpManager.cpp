@@ -252,7 +252,7 @@ bool BmpManager ::configure_device() {
 
     U8 config_sequence[] = {CTRL_MEAS_REGISTER & 0x7F, ctrl_meas_value};  // Clear MSB for write
     Fw::Buffer writeBuffer(config_sequence, sizeof(config_sequence));
-    Fw::Buffer readBuffer;
+    Fw::Buffer readBuffer(config_sequence, sizeof(config_sequence));
 
     bool success = this->spi_transfer(writeBuffer, readBuffer);
 
