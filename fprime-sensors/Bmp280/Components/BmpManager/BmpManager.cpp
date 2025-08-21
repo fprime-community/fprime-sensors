@@ -260,7 +260,7 @@ bool BmpManager ::configure_device() {
         U8 config_value = 0x00;                                         // No IIR filter, 4-wire SPI
         U8 config_sequence[] = {CONFIG_REGISTER & 0x7F, config_value};  // Clear MSB for write
         Fw::Buffer configWriteBuffer(config_sequence, sizeof(config_sequence));
-        Fw::Buffer configReadBuffer;
+        Fw::Buffer configReadBuffer(config_sequence, sizeof(config_sequence));
 
         success = this->spi_transfer(configWriteBuffer, configReadBuffer);
     }
