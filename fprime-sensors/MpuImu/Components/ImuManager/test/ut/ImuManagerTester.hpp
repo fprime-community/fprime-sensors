@@ -28,6 +28,9 @@ class ImuManagerTester : public ImuManagerGTestBase, public ::testing::Test {
     // Instance ID supplied to the component instance under test
     static const FwEnumStoreType TEST_INSTANCE_ID = 0;
 
+    // Instance Queue Depth
+    static const FwSizeType TEST_INSTANCE_QUEUE_DEPTH = 10;
+
   public:
     // ----------------------------------------------------------------------
     // Construction and destruction
@@ -70,14 +73,27 @@ class ImuManagerTester : public ImuManagerGTestBase, public ::testing::Test {
     void fill_read_data(Fw::Buffer& readBuffer);
 
     //! Handler implementation for from_bus
-    Drv::I2cStatus from_bus_handler(FwIndexType portNum,      //!< The port number
-                                    U32 addr,                 //!< I2C slave device address
-                                    Fw::Buffer& writeBuffer,  //!< Buffer to write data to the i2c device
-                                    Fw::Buffer& readBuffer  //!< Buffer to read back data from the i2c device, must set
-                                                            //!< size when passing in read buffer
-                                    ) final;
+    Drv::I2cStatus from_busWriteRead_handler(FwIndexType portNum,      //!< The port number
+                                             U32 addr,                 //!< I2C slave device address
+                                             Fw::Buffer& writeBuffer,  //!< Buffer to write data to the i2c device
+                                             Fw::Buffer& readBuffer    //!< Buffer to read back data from the i2c device, must set
+                                                                       //!< size when passing in read buffer
+                                            ) final;
+    
+    //! Handler implementation for from_bus
+    Drv::I2cStatus from_busWrite_handler(FwIndexType portNum,      //!< The port number
+                                         U32 addr,                 //!< I2C slave device address
+                                         Fw::Buffer& writeBuffer   //!< Buffer to write data to the i2c device
+                                        ) final;
 
   private:
+    //! Handler implementation for from_bus
+    Drv::I2cStatus bus_handler_helper(U32 addr,                 //!< I2C slave device address
+                                      Fw::Buffer& writeBuffer,  //!< Buffer to write data to the i2c device
+                                      Fw::Buffer& readBuffer    //!< Buffer to read back data from the i2c device, must set
+                                                                //!< size when passing in read buffer
+                                     );
+
     // ----------------------------------------------------------------------
     // Helper functions
     // ----------------------------------------------------------------------

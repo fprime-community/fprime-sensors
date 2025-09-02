@@ -28,9 +28,9 @@ void ImuManagerTester ::tick() {
 }
 
 void ImuManagerTester ::nominal_boot_sequence() {
-    // Initial tick starts reset sequence
+    // Initial tick moves into RESET state
     this->tick();
-    ASSERT_from_bus_SIZE(1);
+    ASSERT_from_busWrite_SIZE(1);
     ASSERT_EVENTS_I2cError_SIZE(0);
     this->verify_state_and_clear(ImuManagerTester::State::WAIT_RESET);
 
@@ -38,20 +38,27 @@ void ImuManagerTester ::nominal_boot_sequence() {
     // Wait a while before triggering reset finish
     for (FwSizeType i = 0; i < static_cast<FwSizeType>(randomValue); i++) {
         this->tick();
-        ASSERT_from_bus_SIZE(1);
+        ASSERT_from_busWriteRead_SIZE(1);
         this->verify_state_and_clear(ImuManagerTester::State::WAIT_RESET);
     }
-    // Trigger reset finish, will perform POWER_ON and finish tick in configuration
+    // Trigger reset finish to move out of WAIT_RESET
     this->state = ImuManagerTester::State::WAIT_RESET_FINISH;
     this->tick();
-    ASSERT_from_bus_SIZE(2);
+    ASSERT_from_busWriteRead_SIZE(1);
+    ASSERT_from_busWrite_SIZE(0);
+    this->verify_state_and_clear(ImuManagerTester::State::POWER_ON);
+
+    // Next tick should push us through the ENABLE state
+    this->tick();
+    ASSERT_from_busWrite_SIZE(1);
+    ASSERT_from_busWriteRead_SIZE(0);
     this->verify_state_and_clear(ImuManagerTester::State::CONFIGURE_ACCELEROMETER);
 }
 
 void ImuManagerTester ::reconfigure_sequence() {
     // Trigger configuration, will end in RUN state
     this->tick();
-    ASSERT_from_bus_SIZE(2);
+    ASSERT_from_busWrite_SIZE(2);
     this->verify_state_and_clear(ImuManagerTester::State::RUN);
 }
 
@@ -60,7 +67,7 @@ void ImuManagerTester ::nominal_run_sequence() {
     U32 randomValue = STest::Pick::lowerUpper(0, 20);
     for (FwSizeType i = 0; i < static_cast<FwSizeType>(randomValue); i++) {
         this->tick();
-        ASSERT_from_bus_SIZE(1);
+        ASSERT_from_busWriteRead_SIZE(1);
         ASSERT_TLM_Reading_SIZE(1);
         ASSERT_TLM_Reading(0, this->imuData);
         this->verify_state_and_clear(ImuManagerTester::State::RUN);
@@ -74,16 +81,17 @@ void ImuManagerTester ::verify_register_write(U8 registerAddress, U8 registerVal
 }
 
 void ImuManagerTester ::verify_reset() {
-    ASSERT_from_bus_SIZE(1);
-    ImuManagerTester::FromPortEntry_bus entry = fromPortHistory_bus->at(0);
+    ASSERT_from_busWrite_SIZE(1);
+    ImuManagerTester::FromPortEntry_busWrite entry = fromPortHistory_busWrite->at(0);
     ASSERT_EQ(entry.addr, 0x68);
-    this->verify_register_write(0x6B, 0x80, entry.writeBuffer);
+    this->verify_register_write(0x6B, 0x80, entry.serBuffer);
 }
 
 void ImuManagerTester ::verify_state_and_clear(State state) {
     ASSERT_EQ(this->state, state);
     this->clearHistory();
-    ASSERT_from_bus_SIZE(0);
+    ASSERT_from_busWrite_SIZE(0);
+    ASSERT_from_busWriteRead_SIZE(0);
 }
 
 void ImuManagerTester ::pick_acceleration_range() {
@@ -131,7 +139,7 @@ void ImuManagerTester ::pick_gyroscope_range() {
 }
 
 void ImuManagerTester ::fill_read_data(Fw::Buffer& readBuffer) {
-    ImuManager::RawImuData raw;
+    RawImuData raw;
     raw.acceleration[0] = STest::Pick::lowerUpper(0, 0xFFFF);
     raw.acceleration[1] = STest::Pick::lowerUpper(0, 0xFFFF);
     raw.acceleration[2] = STest::Pick::lowerUpper(0, 0xFFFF);
@@ -150,17 +158,37 @@ void ImuManagerTester ::fill_read_data(Fw::Buffer& readBuffer) {
     this->imuData = ImuManager::convert_raw_data(raw, this->accelerationRange, this->gyroscopeRange);
 }
 
-Drv::I2cStatus ImuManagerTester ::from_bus_handler(
+Drv::I2cStatus ImuManagerTester ::from_busWrite_handler(
+    FwIndexType portNum,      //!< The port number
+    U32 addr,                 //!< I2C slave device address
+    Fw::Buffer& writeBuffer  //!< Buffer to write data to the i2c device
+) {
+    Fw::Buffer readBuffer;
+    this->pushFromPortEntry_busWrite(addr, writeBuffer);
+    return this->bus_handler_helper(addr, writeBuffer, readBuffer);
+}
+
+
+Drv::I2cStatus ImuManagerTester ::from_busWriteRead_handler(
     FwIndexType portNum,      //!< The port number
     U32 addr,                 //!< I2C slave device address
     Fw::Buffer& writeBuffer,  //!< Buffer to write data to the i2c device
     Fw::Buffer& readBuffer  //!< Buffer to read back data from the i2c device, must set size when passing in read buffer
 ) {
-    this->pushFromPortEntry_bus(addr, writeBuffer, readBuffer);
+    this->pushFromPortEntry_busWriteRead(addr, writeBuffer, readBuffer);
+    return this->bus_handler_helper(addr, writeBuffer, readBuffer);
+}
+
+Drv::I2cStatus ImuManagerTester ::bus_handler_helper(
+    U32 addr,                 //!< I2C slave device address
+    Fw::Buffer& writeBuffer,  //!< Buffer to write data to the i2c device
+    Fw::Buffer& readBuffer  //!< Buffer to read back data from the i2c device, must set size when passing in read buffer
+) {
     switch (this->state) {
+        // Check the output of the IMU when waiting for reset to finish
         case ImuManagerTester::State::RESET:
+            EXPECT_EQ(this->state, ImuManagerTester::State::RESET); 
             this->verify_reset();
-            EXPECT_EQ(readBuffer.getSize(), 0);
             this->state = ImuManagerTester::State::WAIT_RESET;
             break;
         // Check the output of the IMU when waiting for reset to finish

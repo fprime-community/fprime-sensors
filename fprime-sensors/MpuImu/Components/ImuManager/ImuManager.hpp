@@ -8,38 +8,13 @@
 #define MpuImu_ImuManager_HPP
 
 #include "fprime-sensors/MpuImu/Components/ImuManager/ImuManagerComponentAc.hpp"
+#include "fprime-sensors/MpuImu/Components/ImuManager/ImuTypes.hpp"
 
 namespace MpuImu {
 
 class ImuManager final : public ImuManagerComponentBase {
+    friend class ImuManagerTester;
   public:
-    static constexpr U8 DATA_LENGTH = (6 + 1) * sizeof(U16);  // 6 DoF + temperature
-    static constexpr U8 DATA_BASE_REGISTER = 0x3B;
-    static constexpr U8 DEVICE_ADDRESS = 0x68;
-    static constexpr U8 POWER_MGMT_REGISTER = 0x6B;
-    static constexpr U8 RESET_VALUE = 0x80;
-    static constexpr U8 POWER_ON_VALUE = 0x00;
-    static constexpr U8 GYRO_CONFIG_REGISTER = 0x1B;
-    static constexpr U8 ACCEL_CONFIG_REGISTER = 0x1C;
-
-    // Configuration values for the accelerometer and gyroscope
-    static constexpr U8 ACCEL_CONFIG_2G = 0x00;
-    static constexpr U8 ACCEL_CONFIG_4G = 0x08;
-    static constexpr U8 ACCEL_CONFIG_8G = 0x10;
-    static constexpr U8 ACCEL_CONFIG_16G = 0x18;
-    static constexpr U8 GYRO_CONFIG_250DEG = 0x00;
-    static constexpr U8 GYRO_CONFIG_500DEG = 0x08;
-    static constexpr U8 GYRO_CONFIG_1000DEG = 0x10;
-    static constexpr U8 GYRO_CONFIG_2000DEG = 0x18;
-    static constexpr F32 TEMPERATURE_SCALAR = 340.0f;
-    static constexpr F32 TEMPERATURE_OFFSET = 36.53f;
-
-    struct RawImuData {
-        U16 acceleration[3];
-        U16 temperature;
-        U16 gyroscope[3];
-    };
-
     // ----------------------------------------------------------------------
     // Component construction and destruction
     // ----------------------------------------------------------------------
@@ -51,16 +26,8 @@ class ImuManager final : public ImuManagerComponentBase {
     //! Destroy ImuManager object
     ~ImuManager();
 
-    //! Converts raw IMU data to the telemetry structure
-    static ImuData convert_raw_data(const RawImuData& raw,
-                                    const AccelerationRange& accelerationRange,
-                                    const GyroscopeRange& gyroscopeRange);
-
-    //! Acceleration range to register value
-    static U8 accelerometer_range_to_register(AccelerationRange range);
-
-    //! Gyroscope range to register value
-    static U8 gyroscope_range_to_register(GyroscopeRange range);
+    //! Configure the device address
+    void configure(U8 device_address=DEVICE_DEFAULT_ADDRESS);
 
   private:
     // ----------------------------------------------------------------------
@@ -78,34 +45,95 @@ class ImuManager final : public ImuManagerComponentBase {
     void run_handler(FwIndexType portNum,  //!< The port number
                      U32 context           //!< The call order
                      ) override;
+  private:
+    // ----------------------------------------------------------------------
+    // Handler implementations for commands
+    // ----------------------------------------------------------------------
+
+    //! Handler implementation for command RESET
+    //!
+    //! Command to force a RESET
+    void RESET_cmdHandler(FwOpcodeType opCode,  //!< The opcode
+                          U32 cmdSeq            //!< The command sequence number
+                          ) override;
+
+    // ----------------------------------------------------------------------
+    // Implementations for internal state machine actions
+    // ----------------------------------------------------------------------
+
+    //! Implementation for action doReset of state machine MpuImu_ImuStateMachine
+    //!
+    //! Perform reset commands
+    void MpuImu_ImuStateMachine_action_doReset(SmId smId,                             //!< The state machine id
+                                               MpuImu_ImuStateMachine::Signal signal  //!< The signal
+                                               ) override;
+
+    //! Implementation for action checkReset of state machine MpuImu_ImuStateMachine
+    //!
+    //! Perform checkReset commands
+    void MpuImu_ImuStateMachine_action_checkReset(SmId smId,                             //!< The state machine id
+                                                  MpuImu_ImuStateMachine::Signal signal  //!< The signal
+                                                 ) override;
+
+    //! Implementation for action doEnable of state machine MpuImu_ImuStateMachine
+    //!
+    //! Perform enable commands
+    void MpuImu_ImuStateMachine_action_doEnable(SmId smId,                             //!< The state machine id
+                                                MpuImu_ImuStateMachine::Signal signal  //!< The signal
+                                                ) override;
+
+    //! Implementation for action doConfigure of state machine MpuImu_ImuStateMachine
+    //!
+    //! Perform configure commands
+    void MpuImu_ImuStateMachine_action_doConfigure(SmId smId,                             //!< The state machine id
+                                                   MpuImu_ImuStateMachine::Signal signal  //!< The signal
+                                                   ) override;
+
+    //! Implementation for action doRead of state machine MpuImu_ImuStateMachine
+    //!
+    //! Read the IMU
+    void MpuImu_ImuStateMachine_action_doRead(SmId smId,                             //!< The state machine id
+                                              MpuImu_ImuStateMachine::Signal signal  //!< The signal
+                                              ) override;
 
     // ----------------------------------------------------------------------
     // Helper functions
     // ----------------------------------------------------------------------
 
-    //! Resets the IMU
-    bool reset();
+        //! Converts raw IMU data to the telemetry structure
+    static ImuData convert_raw_data(const RawImuData& raw,
+                                    const AccelerationRange& accelerationRange,
+                                    const GyroscopeRange& gyroscopeRange);
 
-    //! Power on the IMU
-    bool power_on();
+    //! Acceleration range to register value
+    static U8 accelerometer_range_to_register(AccelerationRange range);
+
+    //! Gyroscope range to register value
+    static U8 gyroscope_range_to_register(GyroscopeRange range);
+
+    //! Resets the IMU
+    Drv::I2cStatus reset();
 
     //! Read the reset register value
-    bool read_reset(U8& value);
+    Drv::I2cStatus read_reset(U8& value);
+
+    //! Enable on the IMU
+    Drv::I2cStatus enable();
 
     //! Configure the IMU's accelerometer and gyroscope
-    bool configure_device();
+    Drv::I2cStatus configure_device();
+
+    //! Read IMU data
+    Drv::I2cStatus read(ImuData& imuData);
 
     //! Write to the I2C bus and handle errors
-    bool bus_write(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer);
+    Drv::I2cStatus bus_write(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer);
 
     //! Deserializes raw data from the bus
     RawImuData deserialize_raw_data(Fw::Buffer& buffer);
 
-    //! State of the IMU component
-    enum ImuState { RESET, POWER_ON, CONFIGURE, RUNNING };
-
-    //! Tracks the state of the IMU
-    ImuState m_state;
+  private:
+    U8 m_address;
 };
 
 }  // namespace MpuImu

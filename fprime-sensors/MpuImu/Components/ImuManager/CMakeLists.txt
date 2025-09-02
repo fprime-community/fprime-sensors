@@ -13,13 +13,16 @@
 register_fprime_module(
     AUTOCODER_INPUTS
         "${CMAKE_CURRENT_LIST_DIR}/ImuManager.fpp"
+        "${CMAKE_CURRENT_LIST_DIR}/ImuStateMachine.fpp"
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/ImuManager.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/ImuHelpers.cpp"
 )
 
 register_fprime_ut(
     AUTOCODER_INPUTS
         "${CMAKE_CURRENT_LIST_DIR}/ImuManager.fpp"
+        "${CMAKE_CURRENT_LIST_DIR}/ImuStateMachine.fpp"
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/ImuManagerTestMain.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/ImuManagerTester.cpp"

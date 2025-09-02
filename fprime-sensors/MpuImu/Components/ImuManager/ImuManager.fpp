@@ -1,6 +1,6 @@
 module MpuImu {
     @ Component emitting telemetry read from an MpuImu
-    passive component ImuManager {
+    queued component ImuManager {
 
         @ Port for I2C bus communication
         output port busWriteRead: Drv.I2cWriteRead
@@ -32,6 +32,12 @@ module MpuImu {
 
         @ Parameter for setting the gyroscope range
         param GYROSCOPE_RANGE: GyroscopeRange default GyroscopeRange.RANGE_250DEG
+
+        @ Command to force a RESET
+        async command RESET()
+
+        @ ImuSM instance
+        state machine instance imuStateMachine: ImuStateMachine
 
         ###############################################################################
         # Standard AC Ports: Required for Channels, Events, Commands, and Parameters  #
