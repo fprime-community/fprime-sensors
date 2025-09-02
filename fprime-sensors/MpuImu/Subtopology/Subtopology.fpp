@@ -1,6 +1,7 @@
 module MpuImu {
     @ Manager overseeing the IMU
-    instance imuManager: MpuImu.ImuManager base id MpuImu.SubtoplogyConfig.BASE_ID + 0x00001000
+    instance imuManager: MpuImu.ImuManager base id MpuImu.BASE_ID + 0x00001000 \
+        queue size MpuImu.QueueSizes.imuManager
 
     topology Subtopology {
         instance imuManager
