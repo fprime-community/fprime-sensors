@@ -6,7 +6,7 @@
 #ifndef XBee_XBeeSubtopologyConfig_hpp
 #define XBee_XBeeSubtopologyConfig_hpp
 
-#include <Fw/Types/BasicTypes.h>
+#include <Fw/Logger/Logger.hpp>
 #include "Fw/Types/MallocAllocator.hpp"
 
 namespace XBee {

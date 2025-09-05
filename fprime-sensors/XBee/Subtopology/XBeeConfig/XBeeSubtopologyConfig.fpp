@@ -1,10 +1,6 @@
 module XBee {
 
     module BuffMgr {
-        constant gpsAccumulatorSize    = 1024      
-        constant gpsBufferSize         = 1024      
-        constant gpsAccumulatorCount   = 1      
-        constant gpsBufferCount        = 4
         constant buffMgrId           = 0xA000
     }
 
@@ -30,11 +26,33 @@ module XBee {
             // Uplink is configured for receive so a socket task is started
             if (comDriver.open(state.xbee.device, static_cast<Drv::LinuxUartDriver::UartBaudRate>(state.xbee.baudRate),
                             Drv::LinuxUartDriver::NO_FLOW, Drv::LinuxUartDriver::PARITY_NONE, 1024)) {
-                comDriver.start(100, XBee::Components::STACK_SIZE);
+                comDriver.start(100, XBee::Components::FppConstant_STACK_SIZE::STACK_SIZE);
             } else {
                 Fw::Logger::log("[ERROR] Failed to open UART device %s at baud rate %" PRIu32 "\n", state.xbee.device, state.xbee.baudRate);
             }
         }
+        """
+    }
+
+    instance bufferManager: Svc.BufferManager base id XBee.BASE_ID + 0x03000 {
+        phase Fpp.ToCpp.Phases.configObjects """
+        Svc::BufferManager::BufferBins bins;
+        """
+
+        phase Fpp.ToCpp.Phases.configComponents """
+        memset(&ConfigObjects::XBee_bufferManager::bins, 0, sizeof(ConfigObjects::XBee_bufferManager::bins));
+        ConfigObjects::XBee_bufferManager::bins.bins[0].bufferSize = 2000;
+        ConfigObjects::XBee_bufferManager::bins.bins[0].numBuffers = 5;
+        XBee::bufferManager.setup(
+            XBee::BuffMgr::FppConstant_buffMgrId::buffMgrId,
+            0,
+            XBee::Allocation::memAllocator,
+            ConfigObjects::XBee_bufferManager::bins
+        );
+        """
+
+        phase Fpp.ToCpp.Phases.tearDownComponents """
+        XBee::bufferManager.cleanup();
         """
     }
 }

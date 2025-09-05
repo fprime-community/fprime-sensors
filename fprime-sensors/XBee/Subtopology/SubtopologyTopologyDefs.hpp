@@ -7,6 +7,7 @@
 #define XBee_SubtopologyTopologyDefs_hpp
 
 #include <Fw/Logger/Logger.hpp>
+#include <fprime-sensors/XBee/Subtopology/XBeeConfig/FppConstantsAc.hpp>
 #include "XBeeConfig/XBeeSubtopologyConfig.hpp"
 
 namespace XBee {
