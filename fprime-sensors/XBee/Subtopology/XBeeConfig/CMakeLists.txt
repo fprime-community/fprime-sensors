@@ -1,0 +1,11 @@
+register_fprime_config(
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/XBeeSubtopologyConfig.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/XBeeSubtopologyConfig.hpp"
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/XBeeSubtopologyConfig.fpp"
+    DEPENDS
+        Fw_Types
+    EXCLUDE_FROM_ALL
+)
