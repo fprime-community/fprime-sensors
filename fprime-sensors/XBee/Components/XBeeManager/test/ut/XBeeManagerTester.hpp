@@ -7,24 +7,33 @@
 #ifndef TESTER_HPP
 #define TESTER_HPP
 
-#include "Com/XBee/XBee.hpp"
-#include "GTestBase.hpp"
+#include "XBeeManagerGTestBase.hpp"
+#include "fprime-sensors/XBee/Components/XBeeManager/XBeeManager.hpp"
 
-namespace Com {
+namespace XBee {
 
-class Tester : public XBeeGTestBase {
+class XBeeManagerTester : public XBeeManagerGTestBase {
+    // Maximum size of histories storing events, telemetry, and port outputs
+    static const U32 MAX_HISTORY_SIZE = 10;
+
+    // Instance ID supplied to the component instance under test
+    static const FwEnumStoreType TEST_INSTANCE_ID = 0;
+
+    // Queue depth supplied to the component instance under test
+    static const FwSizeType TEST_INSTANCE_QUEUE_DEPTH = 10;
+
     // ----------------------------------------------------------------------
     // Construction and destruction
     // ----------------------------------------------------------------------
 
   public:
-    //! Construct object Tester
+    //! Construct object XBeeManagerTester
     //!
-    Tester();
+    XBeeManagerTester();
 
-    //! Destroy object Tester
+    //! Destroy object XBeeManagerTester
     //!
-    ~Tester();
+    ~XBeeManagerTester();
 
   public:
     //! Buffer to fill with data
@@ -52,31 +61,29 @@ class Tester : public XBeeGTestBase {
 
   private:
     // ----------------------------------------------------------------------
-    // Handlers for typed from ports
+    // Handlers for output ports (test harness)
     // ----------------------------------------------------------------------
 
-    //! Handler for from_comDataOut
+    //! Handler for from_dataOut
     //!
-    void from_comDataOut_handler(const NATIVE_INT_TYPE portNum, /*!< The port number*/
-                                 Fw::Buffer& recvBuffer,
-                                 const Drv::RecvStatus& recvStatus);
+    void from_dataOut_handler(const FwIndexType portNum, /*!< The port number*/
+                              Fw::Buffer& recvBuffer,
+                              const ComCfg::FrameContext& context) override;
 
-    //! Handler for from_comStatus
+    //! Handler for from_comStatusOut
     //!
-    void from_comStatus_handler(const NATIVE_INT_TYPE portNum, /*!< The port number*/
-                                Svc::ComSendStatus& ComStatus  /*!<
-                             Status of communication state
-                             */
-    );
+    void from_comStatusOut_handler(const FwIndexType portNum,  //!< The port number
+                                   Fw::Success& status         //!< Status of communication state
+                                   ) override;
 
-    //! Handler for from_drvDataOut
+    //! Handler for from_drvSendOut
     //!
-    Drv::SendStatus from_drvDataOut_handler(const NATIVE_INT_TYPE portNum, /*!< The port number*/
-                                            Fw::Buffer& sendBuffer);
+    Drv::ByteStreamStatus from_drvSendOut_handler(const FwIndexType portNum, /*!< The port number*/
+                                                  Fw::Buffer& sendBuffer) override;
 
   private:
     // ----------------------------------------------------------------------
-    // Helper methods
+    // Helper methods (autocoded)
     // ----------------------------------------------------------------------
 
     //! Connect ports
@@ -94,11 +101,11 @@ class Tester : public XBeeGTestBase {
 
     //! The component under test
     //!
-    XBee component;
-    Drv::SendStatus m_send_mode;  //! Send mode
+    XBeeManager component;
+    Drv::ByteStreamStatus m_send_mode;  //! Send mode
     U32 m_retries;
 };
 
-}  // end namespace Com
+}  // namespace XBee
 
 #endif

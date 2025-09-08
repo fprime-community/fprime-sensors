@@ -2,25 +2,25 @@
 // TestMain.cpp
 // ----------------------------------------------------------------------
 
-#include "Tester.hpp"
+#include "XBeeManagerTester.hpp"
 
 TEST(Nominal, Initial) {
-    Com::Tester tester;
+    XBee::XBeeManagerTester tester;
     tester.test_initial();
 }
 
 TEST(Nominal, BasicIo) {
-    Com::Tester tester;
+    XBee::XBeeManagerTester tester;
     tester.test_basic_io();
 }
 
 TEST(Nominal, Fail) {
-    Com::Tester tester;
+    XBee::XBeeManagerTester tester;
     tester.test_fail();
 }
 
 TEST(OffNominal, Retry) {
-    Com::Tester tester;
+    XBee::XBeeManagerTester tester;
     tester.test_retry();
 }
 

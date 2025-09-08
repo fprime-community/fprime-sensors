@@ -21,9 +21,10 @@ register_fprime_ut(
     AUTOCODER_INPUTS
         "${CMAKE_CURRENT_LIST_DIR}/XBeeManager.fpp"
     SOURCES
-        "${CMAKE_CURRENT_LIST_DIR}/test/ut/TestMain.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/test/ut/Tester.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/XBeeManagerTestMain.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/XBeeManagerTester.cpp"
     DEPENDS
         STest
+        Utils_Types
     UT_AUTO_HELPERS
 )
