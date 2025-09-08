@@ -15,9 +15,8 @@ extern Fw::MemAllocator& memAllocator;
 }
 }  // namespace XBee
 
-struct XBeeDevice {
-    const char* device;
-    U32 baudRate;
-};
+// Configure how to identify a device here
+// On Linux, it is a path to a UART device descriptor file
+using XBeeDevice = const char*;
 
 #endif  // XBee_XBeeSubtopologyConfig_hpp

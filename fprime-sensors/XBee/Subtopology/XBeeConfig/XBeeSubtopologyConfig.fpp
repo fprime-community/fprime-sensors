@@ -1,8 +1,6 @@
 module XBee {
 
-    module BuffMgr {
-        constant buffMgrId           = 0xA000
-    }
+    constant buffMgrId           = 0xA000
 
     module Components {
         constant QUEUE_SIZE = 10
@@ -22,13 +20,13 @@ module XBee {
     instance comDriver: Drv.LinuxUartDriver base id XBee.BASE_ID + 0x2000 {
         phase Fpp.ToCpp.Phases.configComponents """
 
-        if (state.xbee.device != nullptr && state.xbee.baudRate != 0) {
+        if (state.xbee.device != nullptr && state.xbee.baud != 0) {
             // Uplink is configured for receive so a socket task is started
-            if (comDriver.open(state.xbee.device, static_cast<Drv::LinuxUartDriver::UartBaudRate>(state.xbee.baudRate),
+            if (XBee::comDriver.open(state.xbee.device, static_cast<Drv::LinuxUartDriver::UartBaudRate>(state.xbee.baud),
                             Drv::LinuxUartDriver::NO_FLOW, Drv::LinuxUartDriver::PARITY_NONE, 1024)) {
-                comDriver.start(100, XBee::Components::FppConstant_STACK_SIZE::STACK_SIZE);
+                XBee::comDriver.start(100, XBee::Components::FppConstant_STACK_SIZE::STACK_SIZE);
             } else {
-                Fw::Logger::log("[ERROR] Failed to open UART device %s at baud rate %" PRIu32 "\n", state.xbee.device, state.xbee.baudRate);
+                Fw::Logger::log("[ERROR] Failed to open UART device %s at baud rate %" PRIu32 "\n", state.xbee.device, state.xbee.baud);
             }
         }
         """
@@ -44,7 +42,7 @@ module XBee {
         ConfigObjects::XBee_bufferManager::bins.bins[0].bufferSize = 2000;
         ConfigObjects::XBee_bufferManager::bins.bins[0].numBuffers = 5;
         XBee::bufferManager.setup(
-            XBee::BuffMgr::FppConstant_buffMgrId::buffMgrId,
+            XBee::FppConstant_buffMgrId::buffMgrId,
             0,
             XBee::Allocation::memAllocator,
             ConfigObjects::XBee_bufferManager::bins

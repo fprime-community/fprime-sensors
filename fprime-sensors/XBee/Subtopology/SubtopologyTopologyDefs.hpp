@@ -11,8 +11,14 @@
 #include "XBeeConfig/XBeeSubtopologyConfig.hpp"
 
 namespace XBee {
+
+struct SubtopologyState {
+    XBeeDevice device;
+    U32 baud;
+};
+
 struct TopologyState {
-    XBeeDevice xbee;
+    SubtopologyState xbee;
 };
 }  // namespace XBee
 #endif  // XBee_SubtopologyTopologyDefs_hpp
