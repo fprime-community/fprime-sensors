@@ -52,9 +52,9 @@ void XBeeManager ::drvReceiveIn_handler(FwIndexType portNum, Fw::Buffer& buffer,
     if (status == Drv::ByteStreamStatus::OP_OK && current_state != PASSTHROUGH && current_state != ERROR_TIMEOUT &&
         current_state != QUIET_RADIO) {
         m_circular.serialize(buffer.getData(), buffer.getSize());
-        deallocate_out(0, buffer);  // TODO: dataReturn ?
+        // REVIEW: memory management ???
+        deallocate_out(0, buffer);
         state_machine();
-        // drvReceiveReturnOut_out(0, buffer);  // TODO: dataReturn ?
     }
     // Otherwise pass data to the deframer
     if (current_state == PASSTHROUGH || current_state == QUIET_RADIO) {
