@@ -1,21 +1,13 @@
 module XBee {
 
-    constant buffMgrId           = 0xA000
+    constant BASE_ID = 0xF0000000
+    
+    constant buffMgrId = 0xA000
 
     module Components {
         constant QUEUE_SIZE = 10
         constant STACK_SIZE = 64 * 1024
     }
-
-
-    constant BASE_ID = 0xF0000000
-
-    # XBee Radio Integration
-    instance comMgr: XBee.XBeeManager base id XBee.BASE_ID + 0x1000 \
-        queue size Components.QUEUE_SIZE \
-        stack size Components.STACK_SIZE \
-        priority 140
-
 
     instance comDriver: Drv.LinuxUartDriver base id XBee.BASE_ID + 0x2000 {
         phase Fpp.ToCpp.Phases.configComponents """
@@ -39,7 +31,7 @@ module XBee {
 
         phase Fpp.ToCpp.Phases.configComponents """
         memset(&ConfigObjects::XBee_bufferManager::bins, 0, sizeof(ConfigObjects::XBee_bufferManager::bins));
-        ConfigObjects::XBee_bufferManager::bins.bins[0].bufferSize = 2000;
+        ConfigObjects::XBee_bufferManager::bins.bins[0].bufferSize = 2048;
         ConfigObjects::XBee_bufferManager::bins.bins[0].numBuffers = 5;
         XBee::bufferManager.setup(
             XBee::FppConstant_buffMgrId::buffMgrId,

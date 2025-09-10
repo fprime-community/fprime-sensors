@@ -89,31 +89,6 @@ class XBeeManager : public XBeeManagerComponentBase {
     //!
     ~XBeeManager();
 
-    //   private:
-    //     // ----------------------------------------------------------------------
-    //     // Handler implementations for user-defined typed input ports
-    //     // ----------------------------------------------------------------------
-
-    //     //! Handler implementation for comDataIn
-    //     //!
-    //     Drv::SendStatus comDataIn_handler(const NATIVE_INT_TYPE portNum, /*!< The port number*/
-    //                                       Fw::Buffer& sendBuffer);
-
-    //     //! Handler implementation for drvConnected
-    //     //!
-    //     void drvConnected_handler(const NATIVE_INT_TYPE portNum);
-
-    //     //! Handler implementation for drvDataIn
-    //     //!
-    //     void drvDataIn_handler(const NATIVE_INT_TYPE portNum,
-    //                            /*!< The port number*/ Fw::Buffer& recvBuffer,
-    //                            const Drv::RecvStatus& recvStatus);
-
-    //     //! Handler implementation for Run port
-    //     //!
-    //     void run_handler(const NATIVE_INT_TYPE portNum, /*!< The port number*/
-    //                      U32 context);
-
   private:
     // ----------------------------------------------------------------------
     // Handler implementations for typed input ports

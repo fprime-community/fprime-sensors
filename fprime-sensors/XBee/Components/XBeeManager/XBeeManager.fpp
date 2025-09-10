@@ -26,12 +26,6 @@ module XBee {
         # Implementation ports
         # ----------------------------------------------------------------------
 
-        @ Allows for deallocation of XBee command communications
-        output port deallocate: Fw.BufferSend
-
-        @ Allows for allocation of buffers
-        output port allocate: Fw.BufferGet
-
         @ Port carrying 1HZ tick for timeout tracking
         sync input port run: Svc.Sched
 

@@ -1,125 +1,91 @@
-\page SvcComStubComponent Svc::ComStub Component
-# Svc::ComStub (Passive Component)
+# XBee::XBeeManager
 
 ## 1. Introduction
 
-`Svc::ComStub` is an example  F´ component implementing the minimal communication interface required to work within F´.
-Projects and users may choose to replace this with a complete communication implementation (i.e. a component managing
-a specific radio) once ready. As long as any communication implementation has at-least this same interface it can
-drop in and work with the standard F´ uplink and downlink chains.
+`XBee::XBeeManager` is an F´ component that implements the `Svc.Com` interface for communications management for XBee radio modules. It implements
+passing data through the radio via a ByteStreamDriver (UART), as well as a commanding mode for the XBee modules (`+++`, `ATxx` commands etc.).
 
 ## 2. Assumptions
 
-Using `Svc::ComStub` directly assumes that the driver layer (e.g. `Drv::TcpClient`) provides all capability needed to
-establish communications. In other words, the project communications strategy is `Tcp` then this stub will be
-sufficient.  If this assumption does not hold, then the project or user should consider implementing a communication
-component with this interface, but matches the specific communication needs (e.g. initializing a radio).
+The `XBee::XBeeManager` assumes that:
+- An XBee radio is connected via a UART/ByteStream driver
+- The XBee radio is configured to respond to AT commands in command mode
+- The radio supports the standard XBee AT command set (ATNI, ATED, ATCN, etc.)
+- The underlying driver provides reliable data transmission and reception
 
 ## 3. Requirements
 
-
-| Requirement     | Description                                                                                                   | Rationale                                                   | Verification Method |
-|-----------------|---------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------|---------------------|
-| SVC-COMSTUB-001 | `Svc::ComStub` shall accept `Fw::Buffer` for transmission and  pass them to a `Drv::ByteStreamSend` port      | The comm interface must send `Fw::Buffer`s through a driver | Unit Test           |
-| SVC-COMSTUB-002 | `Svc::ComStub` shall emit a `Svc::ComStatus::READY` signal on `Drv::ByteStreamSend` success                   | Successful sends must notify any attached `Svc::ComQueue`   | Unit Test           |
-| SVC-COMSTUB-003 | `Svc::ComStub` shall emit a `Svc::ComStatus::FAIL` signal on `Drv::ByteStreamSend` failure                    | Failed sends must notify any attached `Svc::ComQueue`       | Unit Test           |
-| SVC-COMSTUB-004 | `Svc::ComStub` shall retry sending to `Drv::ByteStreamSend` on `Drv::ByteStreamSend` retry                    | Sends indicating `RETRY` should be retried.                 | Unit Test           |
-| SVC-COMSTUB-005 | `Svc::ComStub` shall pass-through `Fw::Buffer` from a  `Drv::ByteStreamRead` on `Drv::ByteStreamSend` success | A Comm interface must receive `Fw::Buffer`s from a driver   | Unit Test           | 
+| Requirement        | Description                                                                                                   | Rationale                                                          | Verification Method |
+|--------------------|---------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|---------------------|
+| XBEE-MANAGER-001   | `XBee::XBeeManager` shall implement the `Svc.Com` interface (Communications Adapter)  | The XBeeManager component is the wrapper component to send and receive data through the XBee radio          | Inspection           |
+| XBEE-MANAGER-002   | `XBee::XBeeManager` shall accept `Fw::Buffer` for transmission in passthrough mode                           | The comm interface must send data through the XBee radio          | Inspection           |
+| XBEE-MANAGER-003   | `XBee::XBeeManager` shall emit success/failure status on communication operations                            | Status feedback is required for communication health monitoring    | Inspection           |
+| XBEE-MANAGER-004   | `XBee::XBeeManager` shall support XBee command mode for radio configuration and status queries              | XBee radios require command mode for configuration operations      | Inspection           |
+| XBEE-MANAGER-005   | `XBee::XBeeManager` shall implement timeout protection for command mode operations                           | Command mode operations must not hang indefinitely                 | Inspection           |
+| XBEE-MANAGER-006   | `XBee::XBeeManager` shall support node identifier retrieval via ATNI command                                | Radio identification is needed for network management              | Inspection           |
+| XBEE-MANAGER-006   | `XBee::XBeeManager` shall support energy density scanning via ATED command                                  | Channel analysis is needed for optimal frequency selection         | Inspection           |
+| XBEE-MANAGER-007   | `XBee::XBeeManager` shall automatically return to passthrough mode after command operations                 | Normal data flow must resume after configuration operations        | Inspection           | 
 
 ## 4. Design
-The diagram below shows the `Svc::ComStub` port interface. Any communications interface implementing or extending this
-port interface can be used alongside the other F´ communication components (`Svc::Framer`, `Svc::Deframer`,
-`Svc::ComQueue`). This interface is described below.
 
-**Svc::ComStub Uplink and Downlink Interface**
+The `XBee::XBeeManager` component implements a state machine-based approach to manage XBee radio communications.
+It operates in different modes: **passthrough mode** for normal data transmission and command modes for radio configuration and queries.
+
+The component maintains a state machine for command mode operations:
+
+**XBee Command Mode State Machine**
 ```mermaid
-graph LR
-    subgraph Svc::Framer
-        framedOut
-    end
-    subgraph Svc::Deframer
-        framedIn
-    end
-    subgraph Svc::ComStub
-        comDataIn
-        comStatus
-        comDataOut
-    end
-    subgraph Svc::ComQueue
-        status
-    end
-    framedOut -->comDataIn
-    comDataOut -->framedIn
-    comStatus -->status        
+stateDiagram-v2
+    [*] --> PASSTHROUGH : Initialize
+    PASSTHROUGH --> QUIET_RADIO : Command Requested
+    QUIET_RADIO --> AWAIT_COMMAND_MODE : Timeout (1s)
+    AWAIT_COMMAND_MODE --> AWAIT_COMMAND_RESPONSE : "OK" received
+    AWAIT_COMMAND_RESPONSE --> AWAIT_PASSTHROUGH : Command response received
+    AWAIT_PASSTHROUGH --> PASSTHROUGH : "OK" received
+    AWAIT_COMMAND_MODE --> ERROR_TIMEOUT : Error/Timeout
+    AWAIT_COMMAND_RESPONSE --> ERROR_TIMEOUT : Error/Timeout
+    AWAIT_PASSTHROUGH --> ERROR_TIMEOUT : Error/Timeout
+    ERROR_TIMEOUT --> PASSTHROUGH : Timeout (10s)
 ```
 
-`Svc::ComStub`'s specific implementation delegates to a `Drv::ByteStreamDriverModel` as a way to transmit data and
-receive data. Other communication implementations may follow-suite.
-
-```mermaid
-flowchart LR
-    subgraph Drv::ByteStreamDriverModel
-        send
-        recv
-        ready
-    end
-    subgraph Svc::ComStub
-        drvDataOut
-        drvDataIn
-        drvConnected
-    end
-    drvDataOut ---->send
-    recv ----->drvDataIn
-    ready ----->drvConnected
-```
-
+The component interfaces with a `Drv::ByteStreamDriverModel` for low-level UART communication:
 
 
 ### 4.1. Ports
 
-`ComQueue` has the following ports.  The first three ports are required for the interface, the second three are optional
-if the communication implementation attaches to an F´ driver for the device interface. i.e. a communication component
-may directly interact with device hardware, or it may pass through send and receive buffers to a UART for actual
-transmission.
+`XBee::XBeeManager` has the following ports. The component implements both the standard communication interface and XBee-specific management functionality.
 
-| Required | Kind         | Name           | Port Type             | Usage                                                                             |
-|----------|--------------|----------------|-----------------------|-----------------------------------------------------------------------------------|
-| Yes      | `sync input` | `comDataIn`    | `Drv.ByteStreamSend`  | Port receiving `Fw::Buffer`s for transmission out `drvDataOut`                    |
-| Yes      | `output`     | `comStatus`    | `Svc.ComStatus`       | Port indicating ready or failed to possibly attached `Svc::ComQueue`              |
-| Yes      | `output`     | `comDataOut`   | `Drv.ByteStreamRecv`  | Port providing received `Fw::Buffers` to a potential `Svc::Deframer`              |
-| No       | `sync input` | `drvConnected` | `Drv.ByteStreamReady` | Port called when the underlying driver has connected                              |
-| No       | `sync input` | `drvDataIn`    | `Drv.ByteStreamRecv`  | Port receiving `Fw::Buffers` from underlying communications bus driver            |
-| No       | `output`     | `drvDataOut`   | `Drv.ByteStreamSend`  | Port providing received `Fw::Buffers` to the underlying communications bus driver |
+| Required | Kind         | Name                 | Port Type             | Usage                                                                             |
+|----------|--------------|----------------------|-----------------------|-----------------------------------------------------------------------------------|
+| Yes      | `sync input` | `dataIn`             | `Svc.ComDataWithContext`             | Port receiving `Fw::Buffer`s for transmission (from `Svc::Framer`)               |
+| Yes      | `output`     | `comStatusOut`       | `Svc.ComDataWithContextStatus`       | Port indicating communication status to attached `Svc::ComQueue`                  |
+| Yes      | `output`     | `dataOut`            | `Svc.ComDataWithContext`             | Port providing received `Fw::Buffers` to `Svc::Deframer`                         |
+| Yes      | `sync input` | `dataReturnIn`       | `Svc.ComDataWithContext`             | Port receiving buffer ownership return from downstream components                  |
+| Yes      | `output`     | `dataReturnOut`      | `Svc.ComDataWithContext`             | Port returning buffer ownership to upstream components                             |
+| Yes      | `sync input` | `drvConnected`       | `Drv.ByteStreamReady` | Port called when the underlying UART driver has connected                         |
+| Yes      | `sync input` | `drvReceiveIn`       | `Drv.ByteStreamData`  | Port receiving `Fw::Buffers` from UART driver                                     |
+| Yes      | `output`     | `drvReceiveReturnOut`| `Fw.BufferSend`       | Port returning buffer ownership to UART driver                                    |
+| Yes      | `output`     | `drvSendOut`         | `Drv.ByteStreamSend`  | Port sending `Fw::Buffers` to UART driver                                         |
+| Yes      | `sync input` | `run`                | `Svc.Sched`           | Port carrying 1Hz tick for timeout tracking and state machine management          |
+| Yes      | `output`     | `allocate`           | `Fw.BufferGet`        | Port for allocating buffers for command operations                                |
+| Yes      | `output`     | `deallocate`         | `Fw.BufferSend`       | Port for deallocating buffers after command operations                            |
 
 
-### 4.2. State, Configuration, and Runtime Setup
+### 4.4. Commands
 
-`Svc::ComStub` has no state, no requires external configuration. However, other communication implementations are not
-precluded from having state nor requiring configuration. The component uses the standard constructor setup for F´
-passive components.
+| Command                | Description                                           | Parameters | Response                           |
+|------------------------|-------------------------------------------------------|------------|------------------------------------|
+| `ReportNodeIdentifier` | Retrieves and reports the XBee radio node identifier | None       | Event with identifier string       |
+| `EnergyDensityScan`    | Performs energy density scan on all channels         | None       | Telemetry with channel energy data |
 
-### 4.3. Port Handlers
+### 4.5. Events
 
-#### 4.3.1 comDataIn
+| Event                 | Severity | Description                                    |
+|-----------------------|----------|------------------------------------------------|
+| `RadioNodeIdentifier` | Activity | Reports the radio's node identifier string    |
 
-The `comDataIn` port handler receives an `Fw::Buffer` from the F´ system for transmission to the ground. Typically, it
-is connected to the output of the `Svc::Framer` component. In this `Svc::ComStub` implementation, it passes this
-`Fw::Buffer` directly to the `drvDataOut` port. It will retry when that port responds with a `RETRY` request. Otherwise, 
- the `comStatus` port will be invoked to indicate success or failure. Retries attempts are limited before the port
-asserts.
+### 4.6. Telemetry
 
-#### 4.3.1 drvConnected
-
-This port receives the connected signal from the driver and responds with exactly one `READY` invocation to the
-`comStatus` port. This starts downlink. This occurs each time the driver reconnects.
-
-#### 4.3.1 drvDataIn
-
-The `drvDataIn` handler receives data read from the driver and supplies it out the `comDataOut` port. It usually is
-connected to the `Svc::Deframer` component
-
-## 5. Change Log
-
-| Date       | Description   |
-|------------|---------------|
-| 2022-07-22 | Initial Draft |
+| Channel         | Type               | Description                                    |
+|-----------------|--------------------|------------------------------------------------|
+| `EnergyDensity` | `EnergyDensityType`| 16-element array of energy density per channel|
