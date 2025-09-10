@@ -24,9 +24,6 @@ module XBee {
             # Buffer allocations
             comDriver.allocate      -> bufferManager.bufferGetCallee
             comDriver.deallocate    -> bufferManager.bufferSendIn
-            comMgr.allocate      -> bufferManager.bufferGetCallee
-            comMgr.deallocate    -> bufferManager.bufferSendIn
-
         }
     }
 }

@@ -159,9 +159,7 @@ bool XBeeManager ::deinitiate_command(const Fw::CmdResponse& response) {
 bool XBeeManager ::send_radio_command(const RadioCommand& command) {
     // Send command, wait 1 second per command mode default guidelines
     Drv::ByteStreamStatus driverStatus = Drv::ByteStreamStatus::SEND_RETRY;
-    U8 bufferData[command.length];
-    Fw::Buffer buffer(bufferData, sizeof(bufferData));
-    ::memcpy(buffer.getData(), command.command, command.length);
+    Fw::Buffer buffer(reinterpret_cast<U8*>(const_cast<char*>(command.command)), command.length);
     for (FwIndexType i = 0; driverStatus == Drv::ByteStreamStatus::SEND_RETRY && i < retryLimit; i++) {
         driverStatus = drvSendOut_out(0, buffer);
     }
