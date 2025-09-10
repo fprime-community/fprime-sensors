@@ -52,14 +52,17 @@ void XBeeManager ::drvReceiveIn_handler(FwIndexType portNum, Fw::Buffer& buffer,
     if (status == Drv::ByteStreamStatus::OP_OK && current_state != PASSTHROUGH && current_state != ERROR_TIMEOUT &&
         current_state != QUIET_RADIO) {
         m_circular.serialize(buffer.getData(), buffer.getSize());
-        // REVIEW: memory management ???
-        deallocate_out(0, buffer);
         state_machine();
+        // return buffer ownership after processing
+        this->drvReceiveReturnOut_out(0, buffer);
     }
     // Otherwise pass data to the deframer
-    if (current_state == PASSTHROUGH || current_state == QUIET_RADIO) {
+    else if (current_state == PASSTHROUGH || current_state == QUIET_RADIO) {
         ComCfg::FrameContext context;
         dataOut_out(0, buffer, context);
+    } else {
+        // In error timeout or other state, just deallocate the buffer
+        this->drvReceiveReturnOut_out(0, buffer);
     }
 }
 
@@ -156,12 +159,11 @@ bool XBeeManager ::deinitiate_command(const Fw::CmdResponse& response) {
 bool XBeeManager ::send_radio_command(const RadioCommand& command) {
     // Send command, wait 1 second per command mode default guidelines
     Drv::ByteStreamStatus driverStatus = Drv::ByteStreamStatus::SEND_RETRY;
-    Fw::Buffer buffer = this->allocate_out(0, command.length);
-    if (buffer.getSize() >= command.length) {
-        ::memcpy(buffer.getData(), command.command, command.length);
-        for (FwIndexType i = 0; driverStatus == Drv::ByteStreamStatus::SEND_RETRY && i < retryLimit; i++) {
-            driverStatus = drvSendOut_out(0, buffer);
-        }
+    U8 bufferData[command.length];
+    Fw::Buffer buffer(bufferData, sizeof(bufferData));
+    ::memcpy(buffer.getData(), command.command, command.length);
+    for (FwIndexType i = 0; driverStatus == Drv::ByteStreamStatus::SEND_RETRY && i < retryLimit; i++) {
+        driverStatus = drvSendOut_out(0, buffer);
     }
     m_timeoutCount = (driverStatus.e == Drv::ByteStreamStatus::OP_OK) ? m_timeoutCount : 0;
     return (buffer.getSize() >= command.length) && (driverStatus.e == Drv::ByteStreamStatus::OP_OK);
