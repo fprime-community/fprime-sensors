@@ -32,9 +32,9 @@ namespace MpuImu {
 
     //! RawImuData: basic structure of imu data as read from the device
     struct RawImuData {
-        U16 acceleration[3];
-        U16 temperature;
-        U16 gyroscope[3];
+        I16 acceleration[3];
+        I16 temperature;
+        I16 gyroscope[3];
     };
 }
 #endif
