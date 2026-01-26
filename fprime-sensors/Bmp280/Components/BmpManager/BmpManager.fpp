@@ -2,6 +2,9 @@ module Bmp280 {
     @ Component emitting telemetry read from a Bmp280
     passive component BmpManager {
 
+        @ Port for requesting Bmp280 sensor data
+        output port bmpDataPush: Bmp280.Bmp280DataOut
+
         @ Port for SPI bus communication
         output port spiReadWrite: Drv.SpiReadWrite
 

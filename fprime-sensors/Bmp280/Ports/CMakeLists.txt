@@ -6,13 +6,9 @@
 # UT_SOURCE_FILES: list of source files for unit tests
 #
 # More information in the F´ CMake API documentation:
-# https://fprime.jpl.nasa.gov/latest/docs/user-manual/build-system/cmake-api/
-#
+# https://fprime.jpl.nasa.gov/latest/documentation/reference/
 ####
-
 register_fprime_module(
-    AUTOCODER_INPUTS
-        "${CMAKE_CURRENT_LIST_DIR}/BmpManager.fpp"
-    SOURCES
-        "${CMAKE_CURRENT_LIST_DIR}/BmpManager.cpp"
-)
+  AUTOCODER_INPUTS
+    "${CMAKE_CURRENT_LIST_DIR}/Ports.fpp"
+) 
