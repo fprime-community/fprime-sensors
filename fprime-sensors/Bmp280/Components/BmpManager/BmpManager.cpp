@@ -141,7 +141,11 @@ void BmpManager ::run_handler(FwIndexType portNum, U32 context) {
 
                 const Bmp280Data bmpData = this->convert_raw_data(raw, this->m_calibration, seaLevelPressure);
 
+                // Publish telemetry and push data through output port when connected
                 this->tlmWrite_Reading(bmpData);
+                if (this->isConnected_bmpDataPush_OutputPort(0)) {
+                    this->bmpDataPush_out(0, bmpData);
+                }
 
                 this->log_WARNING_HI_MeasurementTriggerFailure_ThrottleClear();  // Clear throttle for Measurement
                                                                                  // Trigger Failure event
