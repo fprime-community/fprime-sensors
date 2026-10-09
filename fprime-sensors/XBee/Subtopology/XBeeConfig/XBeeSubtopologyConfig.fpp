@@ -9,13 +9,13 @@ module XBee {
         constant STACK_SIZE = 64 * 1024
     }
 
-    instance comDriver: Drv.LinuxUartDriver base id XBee.BASE_ID + 0x2000 {
+    instance comDriver: Drv.PosixUartDriver base id XBee.BASE_ID + 0x2000 {
         phase Fpp.ToCpp.Phases.configComponents """
 
         if (state.xbee.device != nullptr && state.xbee.baud != 0) {
             // Uplink is configured for receive so a socket task is started
-            if (XBee::comDriver.open(state.xbee.device, static_cast<Drv::LinuxUartDriver::UartBaudRate>(state.xbee.baud),
-                            Drv::LinuxUartDriver::NO_FLOW, Drv::LinuxUartDriver::PARITY_NONE, 1024)) {
+            if (XBee::comDriver.open(state.xbee.device, static_cast<Drv::PosixUartDriver::UartBaudRate>(state.xbee.baud),
+                            Drv::PosixUartDriver::NO_FLOW, Drv::PosixUartDriver::PARITY_NONE, 1024)) {
                 XBee::comDriver.start(100, XBee::Components::STACK_SIZE);
             } else {
                 Fw::Logger::log("[ERROR] Failed to open UART device %s at baud rate %" PRIu32 "\n", state.xbee.device, state.xbee.baud);

@@ -11,13 +11,13 @@ module NmeaGps {
         constant gpsBufferId           = 0xF000
     }
 
-    instance driver: Drv.LinuxUartDriver base id SubtopologyConfig.BASE_ID + 0x111000 \
+    instance driver: Drv.PosixUartDriver base id SubtopologyConfig.BASE_ID + 0x111000 \
     {
         phase Fpp.ToCpp.Phases.configComponents """
             NmeaGps::driver.open(state.gps.device,
-                         static_cast<Drv::LinuxUartDriver::UartBaudRate>(state.gps.baud),
-                         Drv::LinuxUartDriver::UartFlowControl::NO_FLOW,
-                         Drv::LinuxUartDriver::UartParity::PARITY_NONE,
+                         static_cast<Drv::PosixUartDriver::UartBaudRate>(state.gps.baud),
+                         Drv::PosixUartDriver::UartFlowControl::NO_FLOW,
+                         Drv::PosixUartDriver::UartParity::PARITY_NONE,
                          1024);
         """
 
@@ -31,7 +31,7 @@ module NmeaGps {
         """
     }
 
-    # The default driver (LinuxUartDriver) requires buffer management and as such the buffer management
+    # The default driver (PosixUartDriver) requires buffer management and as such the buffer management
     # instance must be configured to provide for the driver
     instance bufferManager: Svc.BufferManager base id SubtopologyConfig.BASE_ID + 0x110000 \
     {
