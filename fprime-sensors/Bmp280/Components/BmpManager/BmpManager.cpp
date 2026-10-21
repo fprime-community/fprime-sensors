@@ -304,11 +304,8 @@ bool BmpManager ::spi_transfer(Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) 
     FW_ASSERT(writeBuffer.getSize() == readBuffer.getSize());
 
     // Perform the SPI transfer
-    // Note: spiReadWrite_out calls the underlying SPI driver
-    this->spiReadWrite_out(0, writeBuffer, readBuffer);
-
-    // Linux SPI driver logs warnings internally if ioctl fails
-    return true;
+    const Drv::SpiStatus status = this->spiReadWrite_out(0, writeBuffer, readBuffer);
+    return status == Drv::SpiStatus::SPI_OK;
 }
 
 BmpManager::RawBmpData BmpManager ::deserialize_raw_data(Fw::Buffer& buffer) {

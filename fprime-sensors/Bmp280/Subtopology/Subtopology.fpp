@@ -7,7 +7,7 @@ module Bmp280 {
         instance bmpDriver
 
         connections Bmp280 {
-            bmpManager.spiReadWrite -> bmpDriver.SpiReadWrite
+            bmpManager.spiReadWrite -> bmpDriver.SpiWriteRead
         }
     }
 } 

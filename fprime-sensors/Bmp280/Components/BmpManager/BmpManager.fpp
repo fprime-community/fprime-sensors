@@ -6,7 +6,7 @@ module Bmp280 {
         output port bmpDataPush: Bmp280.Bmp280DataOut
 
         @ Port for SPI bus communication
-        output port spiReadWrite: Drv.SpiReadWrite
+        output port spiReadWrite: Drv.SpiWriteRead
 
         @ Scheduling port for reading from BMP280 and writing to telemetry
         sync input port run: Svc.Sched
