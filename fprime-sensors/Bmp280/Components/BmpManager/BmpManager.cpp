@@ -256,8 +256,10 @@ bool BmpManager ::configure_device() {
     // bits 7:5 = osrs_t (temperature oversampling)
     // bits 4:2 = osrs_p (pressure oversampling)
     // bits 1:0 = mode (00=sleep, 01=forced, 11=normal)
-    U8 ctrl_meas_value = (static_cast<U8>(temperatureOversampling) << 5) |
-                         (static_cast<U8>(pressureOversampling) << 2) | 0x00;  // Start in sleep mode first
+    // TemperatureOversampling/PressureOversampling enum values are already
+    // pre-shifted into their respective bit fields - do not shift them here.
+    U8 ctrl_meas_value = static_cast<U8>(temperatureOversampling) |
+                         static_cast<U8>(pressureOversampling) | 0x00;  // Start in sleep mode first
 
     U8 config_sequence[] = {CTRL_MEAS_REGISTER & 0x7F, ctrl_meas_value};  // Clear MSB for write
     Fw::Buffer writeBuffer(config_sequence, sizeof(config_sequence));
@@ -286,7 +288,7 @@ bool BmpManager ::trigger_measurement() {
 
     // Set device to forced mode to trigger a measurement
     U8 ctrl_meas_value =
-        (static_cast<U8>(temperatureOversampling) << 5) | (static_cast<U8>(pressureOversampling) << 2) | FORCED_MODE;
+        static_cast<U8>(temperatureOversampling) | static_cast<U8>(pressureOversampling) | FORCED_MODE;
 
     // For SPI writes, register address MSB must be 0
     U8 config_sequence[] = {CTRL_MEAS_REGISTER & 0x7F, ctrl_meas_value};  // Clear MSB for write
