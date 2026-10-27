@@ -28,7 +28,7 @@ module MpuImu {
         event I2cError(
             address: U32,
             status: Drv.I2cStatus
-        ) severity warning high format "I2C error on address {} with status {}" throttle 5
+        ) severity warning high format "I2C error on address {} with status {}" throttle 5 every { seconds = 10 }
 
         @ Parameter for setting the accelerometer range
         param ACCELEROMETER_RANGE: AccelerationRange default AccelerationRange.RANGE_2G
