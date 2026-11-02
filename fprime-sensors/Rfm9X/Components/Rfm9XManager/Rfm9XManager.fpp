@@ -1,28 +1,46 @@
 module Rfm9X {
-    @ Curated classical RFM9X FSK bit rates. Higher modes remain excluded until
-    @ FIFO streaming has been demonstrated at those rates on flight hardware.
-    enum Rfm9XDataRate : U16 {
-        BR_1200 = 1200
-        BR_4800 = 4800
-        BR_9600 = 9600
-        BR_19200 = 19200
-        BR_38400 = 38400
+    @ LoRa spreading factor (RegModemConfig2.SpreadingFactor, datasheet Table 59).
+    @ Expressed as chips/symbol base-2 logarithm; SF6 requires the special
+    @ implicit-header configuration noted in datasheet section 4.1.1.2.
+    enum SpreadingFactor : U8 {
+        SF6 = 6
+        SF7 = 7
+        SF8 = 8
+        SF9 = 9
+        SF10 = 10
+        SF11 = 11
+        SF12 = 12
     }
 
-    @ Curated RFM9X FSK receive/AFC filter bandwidth choices. The range starts
-    @ at 100 kHz to leave margin for the fixed 25 kHz deviation at all supported
-    @ bit rates; 500 kHz is the hardware-validated operational default.
-    enum Rfm9XBandwidth : U16 {
-        BW_100_KHZ = 100
-        BW_200_KHZ = 200
-        BW_250_KHZ = 250
-        BW_500_KHZ = 500
+    @ LoRa signal bandwidth (RegModemConfig1.Bw, datasheet section 6.4). Values
+    @ are the full 10-entry Bw field range; 250/500 kHz are unsupported on the
+    @ low-frequency (169 MHz) band per datasheet, not applicable at 434 MHz.
+    enum Bandwidth : U32 {
+        BW_7_8_KHZ = 7800
+        BW_10_4_KHZ = 10400
+        BW_15_6_KHZ = 15600
+        BW_20_8_KHZ = 20800
+        BW_31_25_KHZ = 31250
+        BW_41_7_KHZ = 41700
+        BW_62_5_KHZ = 62500
+        BW_125_KHZ = 125000
+        BW_250_KHZ = 250000
+        BW_500_KHZ = 500000
     }
 
-    @ Nominal RFM9XHCW transmitter output power in dBm. The helper controls
-    @ PA1/PA2, OCP, and TestPa boost registers as one validated configuration.
+    @ LoRa error coding rate (RegModemConfig1.CodingRate, datasheet Table 60).
+    enum CodingRate : U8 {
+        CR_4_5 = 1
+        CR_4_6 = 2
+        CR_4_7 = 3
+        CR_4_8 = 4
+    }
+
+    @ Nominal RFM9X transmitter output power in dBm, on the PA_BOOST pin
+    @ (the Adafruit RFM9X breakout's antenna path per RFM9XDatasheet.md).
+    @ PA_BOOST's floor is +2 dBm (datasheet RegPaConfig), so DBM_0 is omitted.
+    @ The helper controls RegPaConfig, RegOcp, and RegPaDac (+20 dBm) together.
     enum Rfm9XTxPower : I8 {
-        DBM_0 = 0
         DBM_5 = 5
         DBM_10 = 10
         DBM_13 = 13
@@ -110,13 +128,19 @@ module Rfm9X {
         # Parameters
         # ----------------------------------------------------------------------
 
-        @ Classical FSK bit rate; default is the next step above 9.6 kb/s.
-        @ Explicit IDs preserve stored parameter compatibility after old
-        @ fixed-profile parameters were removed. Ground Station must match.
-        param DATA_RATE: Rfm9XDataRate default Rfm9XDataRate.BR_19200 id 0
+        @ LoRa spreading factor. Default SF7 matches the project's 434 MHz
+        @ operating point. Ground Station must match.
+        param SPREADING_FACTOR: SpreadingFactor default SpreadingFactor.SF7 id 0
 
-        @ FSK receive/AFC filter bandwidth; default matches the ground-station image.
-        param BANDWIDTH_RX: Rfm9XBandwidth default Rfm9XBandwidth.BW_500_KHZ id 1
+        @ LoRa signal bandwidth. Default 125 kHz matches the ground-station image.
+        param BANDWIDTH: Bandwidth default Bandwidth.BW_125_KHZ id 1
+
+        @ LoRa error coding rate. Default 4/5 matches the ground-station image.
+        param CODING_RATE: CodingRate default CodingRate.CR_4_5 id 2
+
+        @ RF carrier frequency in Hz. Default 434.0 MHz matches the project's
+        @ stated operating band (datasheet section 6.4, RegFrLsb).
+        param FREQUENCY_HZ: U32 default 434000000 id 3
 
         @ HCW transmitter power configuration, including PA boost when needed.
         param TX_POWER: Rfm9XTxPower default Rfm9XTxPower.DBM_13 id 4
@@ -170,8 +194,11 @@ module Rfm9X {
         @ and must not spam WARNING events onto the downlink or the soak gate.
         telemetry RxCrcErrors: U32
 
-        @ RSSI of last received packet (dBm)
-        telemetry LastRssi: F32
+        @ RSSI of last received packet (dBm): -137 + RegPktRssiValue (datasheet section 6.4)
+        telemetry LastPacketRssi: F32
+
+        @ SNR of last received packet (dB): RegPktSnrValue (two's complement) / 4 (datasheet section 6.4)
+        telemetry LastPacketSnr: F32
 
         @ Radio bring-up state
         telemetry RadioState: Rfm9XRadioState

@@ -22,24 +22,12 @@ Rfm9XManager ::Rfm9XManager(const char* const compName)
       m_txState(TX_IDLE),
       m_txBuffer(),
       m_txContext(),
-      m_txOffset(0),
       m_txWaitTicks(0),
-      m_txElapsedTicks(0),
-      m_txTimeoutTicks(250),
-      m_txBoostEnabled(false),
       m_pendingTxBuffers{},
       m_pendingTxContexts{},
       m_pendingTxCount(0),
-      m_rxDraining(false),
-      m_rxLength(0),
-      m_rxReceived(0),
-      m_rxSawPayloadReady(false),
-      m_rxPayload{},
-      m_rxPollTicks(0),
-      m_rxIdlePollDivisor(8),
-      m_rxActivePollDivisor(4),
-      m_rxStaleSyncTicks(0),
       m_rxDeliverSize(0),
+      m_rxPayload{},
       m_rxTxHoldoffTicks(0),
       m_txTxHoldoffTicks(0),
       m_txStarvedTicks(0),
@@ -58,8 +46,8 @@ Rfm9XManager ::Rfm9XManager(const char* const compName)
 Rfm9XManager ::~Rfm9XManager() {}
 
 void Rfm9XManager ::parameterUpdated(FwPrmIdType id) {
-    // F´ already stored the new value; defer register rewrite to the next run
-    // tick (LoRa re-reads params on each enableTx/enableRx instead).
+    // F´ already stored the new value; defer register rewrite to the next
+    // run tick, which re-reads params during CONFIGURE.
     (void)id;
     Os::ScopeLock lock(this->m_lock);
     if (this->m_state == READY) {
@@ -156,8 +144,8 @@ void Rfm9XManager ::run_handler(FwIndexType portNum, U32 context) {
             this->m_txActive = false;
             if (txProgress == TX_SUCCEEDED) {
                 // Do not immediately re-enter dataIn through the synchronous
-                // Com SUCCESS callback. Give the peer time to empty its FIFO,
-                // restart RX, and reacquire the next preamble/sync word.
+                // Com SUCCESS callback. Give the peer time to switch to RX
+                // and reacquire the preamble.
                 this->m_txTxHoldoffTicks = TX_TX_HOLDOFF_TICKS;
                 this->m_comResumeNeeded = false;
             } else {
@@ -168,12 +156,7 @@ void Rfm9XManager ::run_handler(FwIndexType portNum, U32 context) {
         // Drain local GS hold before RX poll so uplink is not starved by TM.
         dropPending = this->tryStartPendingTransmit(dropBuffer, dropContext);
         if (!this->m_txActive) {
-            const U32 pollDivisor = this->m_rxDraining ? this->m_rxActivePollDivisor : this->m_rxIdlePollDivisor;
-            this->m_rxPollTicks++;
-            if (this->m_rxPollTicks >= pollDivisor) {
-                this->m_rxPollTicks = 0;
-                this->pollReceive();
-            }
+            this->pollReceive();
         }
     } else {
         // Bring-up advances here one bounded step per tick; also covers
@@ -262,7 +245,7 @@ void Rfm9XManager ::initializeRadio() {
     switch (this->m_state) {
         case RESET_ASSERT:
             // Optional hardware RST (recommended when a reset GPIO is wired —
-            // cold power-up / shared-SPI glitches can leave the HCW in a bad
+            // cold power-up / shared-SPI glitches can leave the radio in a bad
             // state). Never required: skip if unconnected or the write fails.
             if (this->isConnected_resetGpio_OutputPort(0) &&
                 (this->resetGpio_out(0, Fw::Logic::HIGH) == Drv::GpioStatus::OP_OK)) {
@@ -299,7 +282,7 @@ void Rfm9XManager ::initializeRadio() {
             }
             break;
         case CONFIGURE:
-            if (this->configureRadio() && this->setMode(Mode::RX)) {
+            if (this->configureRadio() && this->requestMode(Mode::RX_CONTINUOUS)) {
                 this->m_state = READY;
                 this->reportRadioState();
                 this->log_ACTIVITY_HI_RadioReady();
@@ -324,11 +307,6 @@ void Rfm9XManager ::initializeRadio() {
 void Rfm9XManager ::beginResetSequence() {
     this->m_state = RESET_ASSERT;
     this->m_resetTicks = 0;
-    this->m_rxDraining = false;
-    this->m_rxLength = 0;
-    this->m_rxReceived = 0;
-    this->m_rxPollTicks = 0;
-    this->m_rxStaleSyncTicks = 0;
     this->reportRadioState();
 }
 
@@ -364,10 +342,7 @@ bool Rfm9XManager ::startTransmit(Fw::Buffer& data, const ComCfg::FrameContext& 
     }
     this->m_txBuffer = data;
     this->m_txContext = context;
-    this->m_txOffset = 0;
     this->m_txWaitTicks = 0;
-    this->m_txElapsedTicks = 0;
-    this->m_txBoostEnabled = false;
     this->m_txState = TX_REQUEST_STANDBY;
     this->m_txActive = true;
     return true;
@@ -460,7 +435,6 @@ void Rfm9XManager ::RESET_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
             this->m_txBuffer = Fw::Buffer();
             this->m_txState = TX_IDLE;
             this->m_txActive = false;
-            this->m_txBoostEnabled = false;
             this->m_comResumeNeeded = true;
         }
         // Tick-driven: the optional RST pulse and re-detect are advanced one
@@ -476,154 +450,56 @@ void Rfm9XManager ::RESET_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
 }
 
 void Rfm9XManager ::pollReceive() {
-    // At most one packet's drain step per poll (per-tick SPI budget).
-    if (this->m_rxDraining) {
-        this->m_rxStaleSyncTicks = 0;
-        if (this->continueReceiveDrain()) {
-            this->stageReceivedPacket();
-        }
-        // Incomplete drains resume on the next 1 kHz tick (budgeted).
+    U8 flags = 0;
+    if (this->readRegister(Reg::IRQ_FLAGS, flags) != Drv::SpiStatus::SPI_OK) {
         return;
     }
-
-    U8 flags2 = 0;
-    if (this->readRegister(Reg::IRQ_FLAGS_2, flags2) != Drv::SpiStatus::SPI_OK) {
+    if ((flags & IrqFlags::RX_DONE) == 0) {
         return;
     }
-
-    const bool payloadReady = (flags2 & IrqFlags2::PAYLOAD_READY) != 0;
-    const bool fifoLevel = (flags2 & IrqFlags2::FIFO_LEVEL) != 0;
-    const bool fifoNotEmpty = (flags2 & IrqFlags2::FIFO_NOT_EMPTY) != 0;
-
-    // FifoLevel can only become set after packet reception starts. Avoid a
-    // second idle IRQ register read: dataIn independently checks
-    // SyncAddressMatch before taking the half-duplex channel for TX.
-    if (!payloadReady && !(fifoNotEmpty && fifoLevel)) {
-        // Stale-sync re-arm: a noise-triggered SyncAddressMatch that never
-        // delivers a payload byte holds channelBusy() true and blocks downlink
-        // forever. Bound that wait and restart RX. Any FIFO content resets the
-        // bound: bytes present mean a reception is progressing (or a completed
-        // frame is waiting), which the drain path above owns.
-        U8 flags1 = 0;
-        if (!fifoNotEmpty &&
-            (this->readRegister(Reg::IRQ_FLAGS_1, flags1) == Drv::SpiStatus::SPI_OK) &&
-            ((flags1 & IrqFlags1::SYNC_ADDRESS_MATCH) != 0)) {
-            this->m_rxStaleSyncTicks += this->m_rxIdlePollDivisor;
-            if (this->m_rxStaleSyncTicks >= RX_STALE_SYNC_TICKS) {
-                this->m_rxStaleSyncTicks = 0;
-                (void)this->recoverReceive();
-            }
-        } else {
-            this->m_rxStaleSyncTicks = 0;
-        }
-        return;
-    }
-    this->m_rxStaleSyncTicks = 0;
-
-    if (!this->beginReceiveDrain()) {
-        return;
-    }
-    if (this->continueReceiveDrain()) {
-        this->stageReceivedPacket();
-    }
+    this->tryDeliverReceivedPacket();
 }
 
-bool Rfm9XManager ::beginReceiveDrain() {
-    this->updateRssi();
+void Rfm9XManager ::tryDeliverReceivedPacket() {
+    // Re-read the flags byte that gated this call (pollReceive already
+    // confirmed RxDone); PayloadCrcError is only meaningful alongside it.
+    U8 flags = 0;
+    if (this->readRegister(Reg::IRQ_FLAGS, flags) != Drv::SpiStatus::SPI_OK) {
+        return;
+    }
+    // Clear RxDone (and any CRC error) before leaving: write 1 to clear
+    // (datasheet section 6.4). Done regardless of outcome so RX_CONTINUOUS
+    // is ready for the next packet.
+    (void)this->writeRegister(Reg::IRQ_FLAGS, static_cast<U8>(IrqFlags::RX_DONE | IrqFlags::PAYLOAD_CRC_ERROR));
+
+    if ((flags & IrqFlags::PAYLOAD_CRC_ERROR) != 0) {
+        this->m_rxCrcErrors++;
+        this->tlmWrite_RxCrcErrors(this->m_rxCrcErrors);
+        return;
+    }
+
+    this->updateRssiSnr();
+
     U8 length = 0;
-    if (this->readRegister(Reg::FIFO, length) != Drv::SpiStatus::SPI_OK) {
-        return false;
+    U8 currentAddr = 0;
+    if ((this->readRegister(Reg::RX_NB_BYTES, length) != Drv::SpiStatus::SPI_OK) ||
+        (this->readRegister(Reg::FIFO_RX_CURRENT_ADDR, currentAddr) != Drv::SpiStatus::SPI_OK)) {
+        return;
     }
     if ((length == 0) || (static_cast<FwSizeType>(length) > MAX_PACKET_PAYLOAD)) {
-        (void)this->recoverReceive();
-        return false;
+        return;
     }
-    this->m_rxDraining = true;
-    this->m_rxLength = length;
-    this->m_rxReceived = 0;
-    this->m_rxSawPayloadReady = false;
-    return true;
-}
-
-bool Rfm9XManager ::continueReceiveDrain() {
-    FW_ASSERT(this->m_rxDraining);
-    // One FifoLevel watermark drain per tick while the packet is still arriving.
-    // A tight multi-read loop can empty the FIFO before PayloadReady and clear
-    // SyncAddressMatch (datasheet 5.2.3.1), corrupting the frame. On PayloadReady
-    // (CRC pass) read the remaining tail in one burst.
-    U8 flags = 0;
-    if (this->readRegister(Reg::IRQ_FLAGS_2, flags) != Drv::SpiStatus::SPI_OK) {
-        this->abortReceiveDrain();
-        return false;
+    // Data Reception: move the SPI FIFO pointer to the start of the packet
+    // just received before reading it out (datasheet section 4.1.5,
+    // "Payload Data Extraction from FIFO").
+    if (this->writeRegister(Reg::FIFO_ADDR_PTR, currentAddr) != Drv::SpiStatus::SPI_OK) {
+        return;
     }
-    if ((flags & IrqFlags2::FIFO_OVERRUN) != 0) {
-        this->abortReceiveDrain();
-        return false;
-    }
-    if (((flags & IrqFlags2::PAYLOAD_READY) == 0) &&
-        ((flags & IrqFlags2::FIFO_NOT_EMPTY) == 0)) {
-        // CrcOn + CrcAutoClear flushes a bad frame and withholds PayloadReady.
-        // Because every streaming drain preserves one FIFO byte, an empty FIFO
-        // before completion unambiguously means the hardware rejected the CRC.
-        this->m_rxCrcErrors++;
-        this->tlmWrite_RxCrcErrors(this->m_rxCrcErrors);
-        this->abortReceiveDrain();
-        return false;
+    if (!this->readFifo(this->m_rxPayload, length)) {
+        return;
     }
 
-    FwSizeType chunk = 0;
-    if ((flags & IrqFlags2::PAYLOAD_READY) != 0) {
-        this->m_rxSawPayloadReady = true;
-        chunk = static_cast<FwSizeType>(this->m_rxLength) - this->m_rxReceived;
-    } else if ((flags & IrqFlags2::FIFO_LEVEL) != 0) {
-        chunk = FW_MIN(static_cast<FwSizeType>(RX_FIFO_DRAIN_CHUNK),
-                       static_cast<FwSizeType>(this->m_rxLength) - this->m_rxReceived);
-    }
-    if (chunk == 0) {
-        return false;  // Wait for airtime / next 1 kHz tick
-    }
-    if (!this->readFifo(&this->m_rxPayload[this->m_rxReceived], chunk)) {
-        this->abortReceiveDrain();
-        return false;
-    }
-    this->m_rxReceived += chunk;
-
-    if (this->m_rxReceived < static_cast<FwSizeType>(this->m_rxLength)) {
-        return false;  // Continue next 1 kHz tick
-    }
-
-    // PayloadReady is CRC-gated (see m_rxSawPayloadReady): a frame whose byte
-    // count completed without ever observing it failed CRC and must be dropped.
-    if (!this->m_rxSawPayloadReady) {
-        this->m_rxCrcErrors++;
-        this->tlmWrite_RxCrcErrors(this->m_rxCrcErrors);
-        this->abortReceiveDrain();
-        return false;
-    }
-
-    if (this->writeRegister(Reg::PACKET_CONFIG_2,
-                            static_cast<U8>(PacketConfig2::AUTO_RX_RESTART_ON | PacketConfig2::RX_RESTART)) !=
-        Drv::SpiStatus::SPI_OK) {
-        this->abortReceiveDrain();
-        return false;
-    }
-    this->m_rxDraining = false;
-    return true;
-}
-
-void Rfm9XManager ::abortReceiveDrain() {
-    this->m_rxDraining = false;
-    this->m_rxLength = 0;
-    this->m_rxReceived = 0;
-    (void)this->recoverReceive();
-}
-
-void Rfm9XManager ::stageReceivedPacket() {
-    // Called under m_lock: bookkeeping only. run_handler copies the payload
-    // out and performs allocation/delivery after releasing the lock.
-    this->m_rxDeliverSize = this->m_rxReceived;
-    this->m_rxLength = 0;
-    this->m_rxReceived = 0;
+    this->m_rxDeliverSize = length;
     this->m_packetsReceived++;
     this->tlmWrite_PacketsReceived(this->m_packetsReceived);
     // Keep the half-duplex channel clear for the next ground chunk.

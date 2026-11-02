@@ -14,25 +14,23 @@ namespace Rfm9X {
 
 class Rfm9XManager final : public Rfm9XManagerComponentBase {
   public:
-    //! Maximum number of bounded scheduler advances allowed while waiting for
-    //! a radio mode transition. Each advance performs at most one status read.
-    static constexpr U32 MODE_READY_TIMEOUT_TICKS = 20;
-    //! Ticks of SyncAddressMatch without FifoLevel/PayloadReady before re-arm.
-    //! Must exceed airtime to fill FIFO_THRESHOLD at the slowest supported rate
-    //! (BR_1200: ~100 ms for 15 bytes); 250 ms leaves margin.
-    static constexpr U32 RX_STALE_SYNC_TICKS = 250;
+    //! Conservative bound on ticks spent waiting for TxDone after requesting
+    //! TX mode. LoRa time-on-air grows sharply with spreading factor and
+    //! shrinks with bandwidth (datasheet section 4.1.1, Table showing nominal
+    //! bitrate vs. SF/BW/CR); this fixed bound comfortably covers the
+    //! project's SF7/BW125kHz default for a 255-byte payload and is a
+    //! conservative placeholder pending HIL tuning for other SF/BW combinations.
+    static constexpr U32 TX_DONE_TIMEOUT_TICKS = 5000;
     //! After a completed uplink packet, defer downlink this many 1 kHz ticks.
     //! This is an RX-priority lease for the half-duplex link: each packet in a
     //! file burst refreshes it, so flight cannot begin a queued downlink in the
-    //! gap before the next ground chunk (~450 ms in the HIL profile). Once the
-    //! burst ends, TX resumes automatically and drains queued TM/events.
+    //! gap before the next ground chunk. Once the burst ends, TX resumes
+    //! automatically and drains queued TM/events. Carried over from the FSK
+    //! baseline pending HIL retuning for LoRa time-on-air.
     //! Ground-station local pending-TX hold ignores this timer (channelBusy only).
     static constexpr U32 RX_TX_HOLDOFF_TICKS = 500;
-    //! Quiet time between consecutive local transmits (1 kHz ticks). At
-    //! 19.2 kbps a ~150 B packet is ~60 ms on air; the peer then needs to
-    //! drain FIFO, run FileUplink, and re-arm RX. Keep this under the GDS
-    //! file-uplink cooldown (1.0 s) so paced chunks are unchanged and a UART
-    //! burst cannot drain pending TX back-to-back.
+    //! Quiet time between consecutive local transmits (1 kHz ticks). Carried
+    //! over from the FSK baseline pending HIL retuning for LoRa time-on-air.
     static constexpr U32 TX_TX_HOLDOFF_TICKS = 500;
     //! Upper bound on consecutive ticks a pending downlink may remain blocked
     //! by the RX-priority lease. Periodic uplink (e.g. GDS keepalives every
@@ -42,12 +40,13 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! clocking in (channelBusy) is still honored.
     static constexpr U32 RX_HOLDOFF_STARVATION_TICKS = 2 * RX_TX_HOLDOFF_TICKS;
 
-    // Fixed native-packet modem profile. DATA_RATE, BANDWIDTH_RX, and TX_POWER
-    // are the only operator parameters; these values are deliberately compiled
-    // into both the flight and ground-station implementations.
-    static constexpr U8 FIXED_DATA_MODUL = 0x00;        //!< Packet FSK, no shaping
-    static constexpr U16 FIXED_FDEV_REGISTER = 0x019A; //!< 25 kHz deviation
-    static constexpr U32 FIXED_FREQUENCY_HZ = 915000000U;
+    //! Both FIFO base addresses are set to the start of the 256-byte LoRa
+    //! FIFO (datasheet section 4.1.2) rather than the reset defaults
+    //! (FifoTxBaseAddr=0x80, FifoRxBaseAddr=0x00), which would only leave
+    //! 128 bytes for TX. This half-duplex single-antenna link never has TX
+    //! and RX data resident at once, so both directions may use the full
+    //! 256-byte buffer from address 0x00.
+    static constexpr U8 FIFO_BASE_ADDR = 0x00;
 
     // ----------------------------------------------------------------------
     // Component construction and destruction
@@ -79,26 +78,19 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! The radio needs 5 ms after RST release before use (datasheet 7.2.2).
     static constexpr U32 RESET_SETTLE_TICKS = 6;
 
-    //! Non-blocking downlink sequence. No state performs an airtime wait: the
-    //! 1 kHz scheduler advances the sequence with bounded SPI transactions.
+    //! Non-blocking downlink sequence. LoRa's FIFO is filled once in Standby
+    //! (datasheet section 4.1.5: "The LoRa FIFO can only be filled in
+    //! Stand-by mode") and the full 255-byte max payload fits the 256-byte
+    //! FIFO in one shot, so unlike FSK there is no in-flight top-up state.
     enum TxState {
         TX_IDLE,
         TX_REQUEST_STANDBY,
-        TX_WAIT_STANDBY,
-        TX_CLEAR_FIFO,
-        TX_WRITE_LENGTH,
-        TX_LOAD_INITIAL,
-        TX_ENABLE_BOOST,
-        TX_REQUEST_MODE,
-        TX_WAIT_MODE,
-        TX_STREAM,
+        TX_SET_FIFO_PTR,
+        TX_WRITE_PAYLOAD,
+        TX_REQUEST_TX,
+        TX_WAIT_TXDONE,
         TX_REQUEST_RX,
-        TX_WAIT_RX,
-        TX_DISABLE_BOOST,
-        TX_ABORT_CLEAR_FIFO,
-        TX_ABORT_REQUEST_RX,
-        TX_ABORT_WAIT_RX,
-        TX_ABORT_DISABLE_BOOST
+        TX_ABORT_REQUEST_RX
     };
 
     enum TxProgress {
@@ -149,26 +141,18 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! Advance detection/configuration toward READY
     void initializeRadio();
 
-    //! Poll for and deliver received packets (budgeted per 1 kHz tick)
+    //! Poll for and deliver a received packet (one IRQ_FLAGS read per tick)
     void pollReceive();
 
-    //! Continue an in-progress FIFO drain; returns true when a full packet is ready
-    bool continueReceiveDrain();
-
-    //! Start a new drain after validating IRQ flags; returns true if draining
-    bool beginReceiveDrain();
-
-    //! Mark a completed RX packet for delivery on this tick (under m_lock)
-    void stageReceivedPacket();
+    //! Read IRQ_FLAGS and, on RxDone, drain and stage a received packet
+    //! (or drop+count a CRC failure). No-op when neither flag is set.
+    void tryDeliverReceivedPacket();
 
     //! Allocate and emit a received packet on dataOut (outside m_lock)
     void deliverReceivedPacket(const U8* data, FwSizeType size);
 
-    //! Abort an in-progress drain and re-arm the receiver
-    void abortReceiveDrain();
-
     //! Enter the tick-driven hardware reset sequence (or DETECT when the
-    //! optional RST line is unwired), clearing any in-progress RX drain.
+    //! optional RST line is unwired).
     void beginResetSequence();
 
     //! Map the internal lifecycle state to telemetry and write the channel.
@@ -191,7 +175,7 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! Advance the scheduler-driven transmit sequence by one bounded step.
     TxProgress advanceTransmit();
 
-    //! Enter bounded abort recovery after a transmit SPI/timeout failure.
+    //! Enter abort recovery after a transmit SPI/timeout failure.
     void abortTransmit();
 
     // ----------------------------------------------------------------------
@@ -211,22 +195,16 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! \brief Detect the radio by checking the version register
     bool detectRadio();
 
-    //! \brief Apply the packet-mode configuration to the radio
+    //! \brief Apply the LoRa modem configuration to the radio
     bool configureRadio();
 
-    //! \brief Command an operating mode and await ModeReady
-    bool setMode(U8 mode  //!< Mode field value (Rfm9X::Mode)
-    );
+    //! \brief Enter LoRa mode (RegOpMode.LongRangeMode), per the mandatory
+    //! SLEEP-mode-only sequence in datasheet section 6.4.
+    bool enterLoRaMode();
 
-    //! Request an operating mode without waiting for ModeReady.
+    //! Request an operating mode, preserving LongRangeMode (RegOpMode bits 2-0)
     bool requestMode(U8 mode  //!< Mode field value (Rfm9X::Mode)
     );
-
-    //! Clear FIFO/re-arm packet RX after a timeout or malformed packet
-    bool recoverReceive();
-
-    //! Enable or restore the short-duration +20 dBm PA boost path.
-    bool setPowerBoost(bool enabled);
 
     //! \brief True when a reception is in progress (defer TX via Com FAILURE)
     bool channelBusy();
@@ -251,8 +229,8 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
                   FwSizeType size //!< Byte count
     );
 
-    //! \brief Read the RSSI register and update telemetry
-    void updateRssi();
+    //! \brief Read RegPktRssiValue/RegPktSnrValue and update telemetry
+    void updateRssiSnr();
 
     // ----------------------------------------------------------------------
     // Member variables
@@ -268,11 +246,7 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     TxState m_txState;                //!< Current step of the staged TX sequence
     Fw::Buffer m_txBuffer;            //!< Downlink buffer owned by the TX machine
     ComCfg::FrameContext m_txContext; //!< Frame context returned with m_txBuffer
-    FwSizeType m_txOffset;            //!< Payload bytes already streamed to the FIFO
-    U32 m_txWaitTicks;                //!< Ticks spent in the current ModeReady wait
-    U32 m_txElapsedTicks;             //!< Total ticks since TX start (overall bound)
-    U32 m_txTimeoutTicks;             //!< Bitrate-derived bound on m_txElapsedTicks
-    bool m_txBoostEnabled;            //!< +20 dBm boost registers currently active
+    U32 m_txWaitTicks;                //!< Ticks spent waiting for TxDone
 
     //! Local hold used when comStatusOut is unwired (no ComQueue). Mirrors the
     //! Arduino RadioHead ground-station usbHold/retry behavior for half-duplex.
@@ -283,29 +257,11 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     ComCfg::FrameContext m_pendingTxContexts[PENDING_TX_DEPTH];
     U32 m_pendingTxCount;
 
-    //! True while streaming a variable-length RX packet across run ticks
-    bool m_rxDraining;
-    U8 m_rxLength;              //!< Declared payload length from the length byte
-    FwSizeType m_rxReceived;    //!< Bytes of payload copied so far
-    //! True once PayloadReady was observed while draining the current packet.
-    //! With CrcOn + CrcAutoClear (RegPacketConfig1=0xD0) the RFM9X only asserts
-    //! PayloadReady on a CRC pass and flushes the FIFO on a CRC failure, so a
-    //! packet whose byte count completes without PayloadReady is corrupt and must
-    //! be dropped rather than handed to the deframer.
-    bool m_rxSawPayloadReady;
-    U8 m_rxPayload[MAX_PACKET_PAYLOAD];
-    static_assert(sizeof(m_rxPayload) == MAX_PACKET_PAYLOAD,
-                  "RX drain bounds checks assume m_rxPayload holds MAX_PACKET_PAYLOAD bytes");
     //! Completed packet length staged for post-unlock delivery (0 = none)
     FwSizeType m_rxDeliverSize;
-    //! Divider state and bitrate-derived idle/streaming SPI poll periods.
-    //! Idle polling only needs to notice a packet before the 66-byte FIFO fills;
-    //! streaming polling must drain faster than bytes arrive.
-    U32 m_rxPollTicks;
-    U32 m_rxIdlePollDivisor;
-    U32 m_rxActivePollDivisor;
-    //! Consecutive ticks seeing sync+fifo without FifoLevel/PayloadReady
-    U32 m_rxStaleSyncTicks;
+    U8 m_rxPayload[MAX_PACKET_PAYLOAD];
+    static_assert(sizeof(m_rxPayload) == MAX_PACKET_PAYLOAD,
+                  "RX delivery bounds checks assume m_rxPayload holds MAX_PACKET_PAYLOAD bytes");
     //! Remaining 1 kHz ticks to defer flight downlink after a completed RX
     U32 m_rxTxHoldoffTicks;
     //! Remaining 1 kHz ticks to defer the next local TX after a completed TX
@@ -325,7 +281,8 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! allowed again (holdoff expired, radio ready).
     bool m_comResumeNeeded;
 
-    //! Scratch buffers for SPI transactions (address byte + length + payload)
+    //! Scratch buffers for SPI transactions (address byte + up to one full
+    //! 255-byte LoRa FIFO payload)
     U8 m_mosi[MAX_PACKET_PAYLOAD + 2];
     U8 m_miso[MAX_PACKET_PAYLOAD + 2];
 };
