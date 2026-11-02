@@ -1,10 +1,11 @@
 // ======================================================================
 // \title  Rfm9XHelpers.cpp
-// \brief  RFM9X radio-specific helper functions for the Rfm9XManager
+// \brief  RFM9X (SX1276/8) LoRa radio-specific helper functions for the
+//         Rfm9XManager
 //
-// SPI register access and packet handling per the RFM9XHCW datasheet
-// (HopeRF, V1.1). Keeps the radio specifics out of the F Prime handler
-// code in Rfm9XManager.cpp.
+// SPI register access and packet handling per the HopeRF RFM95/96/97/98(W)
+// datasheet. Keeps the radio specifics out of the F Prime handler code in
+// Rfm9XManager.cpp.
 // ======================================================================
 
 #include "fprime-sensors/Rfm9X/Components/Rfm9XManager/Rfm9XManager.hpp"
@@ -46,17 +47,40 @@ bool Rfm9XManager ::detectRadio() {
     return (status == Drv::SpiStatus::SPI_OK) && (version == VERSION_VALUE);
 }
 
+bool Rfm9XManager ::enterLoRaMode() {
+    // datasheet section 6.4, RegOpMode bit 7 (LongRangeMode): "This bit can be
+    // modified only in Sleep mode. A write operation on other device modes
+    // is ignored." Force SLEEP first, then set LongRangeMode in the same
+    // (now-safe) mode, then move to STANDBY for configuration.
+    if (this->writeRegister(Reg::OP_MODE, Mode::SLEEP) != Drv::SpiStatus::SPI_OK) {
+        return false;
+    }
+    if (this->writeRegister(Reg::OP_MODE, static_cast<U8>(Mode::LONG_RANGE_MODE | Mode::SLEEP)) !=
+        Drv::SpiStatus::SPI_OK) {
+        return false;
+    }
+    return this->writeRegister(Reg::OP_MODE, static_cast<U8>(Mode::LONG_RANGE_MODE | Mode::STANDBY)) ==
+           Drv::SpiStatus::SPI_OK;
+}
+
 bool Rfm9XManager ::configureRadio() {
-    // Read operator params at configure time (same pattern as LoRa enableRx/Tx).
-    // All other modem registers come from NATIVE_PACKET_PROFILE.
-    // Parameter validity is ground-managed input: fail into ConfigurationFailed
-    // and retry on the next tick rather than asserting.
+    // Read operator params at configure time (same pattern as the prior FSK
+    // profile). Parameter validity is ground-managed input: fail into
+    // ConfigurationFailed and retry on the next tick rather than asserting.
     Fw::ParamValid isValid = Fw::ParamValid::INVALID;
-    const Rfm9XDataRate dataRateParam = this->paramGet_DATA_RATE(isValid);
+    const SpreadingFactor sfParam = this->paramGet_SPREADING_FACTOR(isValid);
     if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
         return false;
     }
-    const Rfm9XBandwidth bandwidthParam = this->paramGet_BANDWIDTH_RX(isValid);
+    const Bandwidth bwParam = this->paramGet_BANDWIDTH(isValid);
+    if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
+        return false;
+    }
+    const CodingRate crParam = this->paramGet_CODING_RATE(isValid);
+    if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
+        return false;
+    }
+    const U32 freqParam = this->paramGet_FREQUENCY_HZ(isValid);
     if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
         return false;
     }
@@ -65,173 +89,70 @@ bool Rfm9XManager ::configureRadio() {
         return false;
     }
 
-    DataRateSetting dataRate{};
-    BandwidthSetting bandwidth{};
+    U8 sfReg = 0;
+    U8 bwReg = 0;
+    U8 crReg = 0;
     TxPowerSetting power{};
-    if (!getDataRateSetting(dataRateParam, dataRate) || !getBandwidthSetting(bandwidthParam, bandwidth) ||
-        !getTxPowerSetting(txPowerParam, power)) {
+    if (!getSpreadingFactorReg(sfParam, sfReg) || !getBandwidthReg(bwParam, bwReg) ||
+        !getCodingRateReg(crParam, crReg) || !getTxPowerSetting(txPowerParam, power)) {
         return false;
     }
 
-    // The manager is driven by a 1 kHz rate group. Scale SPI polling with the
-    // air rate: idle polls detect reception well before the 66-byte FIFO can
-    // fill, while active polls drain one watermark faster than bytes arrive.
-    // This avoids a blocking SPI ioctl on every 1 ms tick and prevents the
-    // ActiveRateGroup queue from backing up under normal Linux scheduling jitter.
-    this->m_rxActivePollDivisor = 1;
-    if (dataRateParam == Rfm9XDataRate::BR_38400) {
-        this->m_rxIdlePollDivisor = 4;
-        this->m_txTimeoutTicks = 150;
-    } else if (dataRateParam == Rfm9XDataRate::BR_19200) {
-        this->m_rxIdlePollDivisor = 8;
-        this->m_txTimeoutTicks = 250;
-    } else if (dataRateParam == Rfm9XDataRate::BR_9600) {
-        this->m_rxIdlePollDivisor = 16;
-        this->m_txTimeoutTicks = 400;
-    } else if (dataRateParam == Rfm9XDataRate::BR_4800) {
-        this->m_rxIdlePollDivisor = 32;
-        this->m_txTimeoutTicks = 750;
-    } else {
-        this->m_rxIdlePollDivisor = 64;
-        this->m_txTimeoutTicks = 3000;
+    // SLEEP -> LongRangeMode -> STANDBY (datasheet section 6.4 RegOpMode note).
+    if (!this->enterLoRaMode()) {
+        return false;
     }
-    this->m_rxPollTicks = 0;
 
-    // Frf register value: frequency / (32 MHz / 2^19) (datasheet section 4.2.4)
-    const U32 frf = static_cast<U32>((static_cast<U64>(FIXED_FREQUENCY_HZ) * FRF_DIVISOR) / CRYSTAL_HZ);
-    const PacketProfile& packet = NATIVE_PACKET_PROFILE;
+    const U32 frf = frequencyToFrf(freqParam);
     const struct {
         U8 address;
         U8 value;
     } configuration[] = {
-        {Reg::OP_MODE, Mode::STANDBY},  // Sequencer on, standby
-        {Reg::DATA_MODUL, FIXED_DATA_MODUL},  // Packet FSK, no shaping
-        {Reg::BITRATE_MSB, static_cast<U8>(dataRate.bitrateReg >> 8)},
-        {Reg::BITRATE_LSB, static_cast<U8>(dataRate.bitrateReg & 0xFF)},
-        {Reg::FDEV_MSB, static_cast<U8>(FIXED_FDEV_REGISTER >> 8)},
-        {Reg::FDEV_LSB, static_cast<U8>(FIXED_FDEV_REGISTER & 0xFF)},
         {Reg::FRF_MSB, static_cast<U8>(frf >> 16)},
         {Reg::FRF_MID, static_cast<U8>(frf >> 8)},
         {Reg::FRF_LSB, static_cast<U8>(frf & 0xFF)},
-        {Reg::PA_LEVEL, power.paLevel},  // HCW PA1/PA2 selection and output
-        {Reg::OCP, Pa::OCP_NORMAL},
-        {Reg::RX_BW, bandwidth.rxBw},
-        {Reg::AFC_BW, bandwidth.afcBw},
-        {Reg::DIO_MAPPING_2, DIO_MAPPING_2_CLKOUT_OFF},
-        {Reg::RSSI_THRESH, RSSI_THRESH_VALUE},
-        {Reg::PREAMBLE_MSB, static_cast<U8>(packet.preambleBytes >> 8)},
-        {Reg::PREAMBLE_LSB, static_cast<U8>(packet.preambleBytes & 0xFF)},
-        {Reg::SYNC_CONFIG, SYNC_CONFIG_VALUE},
-        {Reg::SYNC_VALUE_1, packet.sync[0]},
-        {Reg::SYNC_VALUE_2, packet.sync[1]},
-        {Reg::SYNC_VALUE_3, packet.sync[2]},
-        {Reg::SYNC_VALUE_4, packet.sync[3]},
-        {Reg::SYNC_VALUE_5, packet.sync[4]},
-        {Reg::SYNC_VALUE_6, packet.sync[5]},
-        {Reg::SYNC_VALUE_7, packet.sync[6]},
-        {Reg::SYNC_VALUE_8, packet.sync[7]},
-        {Reg::PACKET_CONFIG_1, packet.packetConfig1},  // Variable length, whitening, CRC
-        {Reg::PAYLOAD_LENGTH, static_cast<U8>(MAX_PACKET_PAYLOAD)},
-        {Reg::FIFO_THRESH, static_cast<U8>(TX_START_FIFO_NOT_EMPTY | packet.fifoThreshold)},
-        {Reg::PACKET_CONFIG_2, packet.packetConfig2},
-        {Reg::TEST_PA_1, Pa::TEST_PA_1_NORMAL},
-        {Reg::TEST_PA_2, Pa::TEST_PA_2_NORMAL},
-        {Reg::TEST_DAGC, packet.testDagc},  // Recommended default
+        {Reg::PA_CONFIG, power.paConfig},
+        {Reg::OCP, power.ocp},
+        {Reg::PA_DAC, power.paDac},
+        // RegModemConfig1: Bw | CodingRate | ImplicitHeaderModeOn=0 (explicit header)
+        {Reg::MODEM_CONFIG_1, static_cast<U8>(bwReg | crReg)},
+        // RegModemConfig2: SpreadingFactor | TxContinuousMode=0 | RxPayloadCrcOn=1 | SymbTimeout(9:8)=0
+        {Reg::MODEM_CONFIG_2, static_cast<U8>(static_cast<U8>(sfReg << 4) | 0x04)},
+        {Reg::SYMB_TIMEOUT_LSB, 0x64},  // datasheet reset default (100 symbols)
+        {Reg::PREAMBLE_MSB, static_cast<U8>(FIXED_PREAMBLE_LENGTH >> 8)},
+        {Reg::PREAMBLE_LSB, static_cast<U8>(FIXED_PREAMBLE_LENGTH & 0xFF)},
+        {Reg::MAX_PAYLOAD_LENGTH, static_cast<U8>(MAX_PACKET_PAYLOAD)},
+        {Reg::FIFO_TX_BASE_ADDR, FIFO_BASE_ADDR},
+        {Reg::FIFO_RX_BASE_ADDR, FIFO_BASE_ADDR},
+        {Reg::DIO_MAPPING_1, Dio0Mapping::RX_DONE},  // Default to RX mapping; TX flips this before each send
     };
     for (FwSizeType i = 0; i < FW_NUM_ARRAY_ELEMENTS(configuration); i++) {
         if (this->writeRegister(configuration[i].address, configuration[i].value) != Drv::SpiStatus::SPI_OK) {
             return false;
         }
     }
-    // Clear any FIFO residue from before configuration
-    return this->writeRegister(Reg::IRQ_FLAGS_2, IrqFlags2::FIFO_OVERRUN) == Drv::SpiStatus::SPI_OK;
-}
-
-bool Rfm9XManager ::setMode(U8 mode) {
-    if (!this->requestMode(mode)) {
-        return false;
-    }
-    // Bounded poll for ModeReady (datasheet section 6, RegIrqFlags1).
-    // Runtime TX uses the scheduler-driven state machine below instead; this
-    // synchronous helper is limited to startup and exceptional RX recovery.
-    for (U32 i = 0; i < MODE_READY_TIMEOUT_TICKS; i++) {
-        U8 flags = 0;
-        if (this->readRegister(Reg::IRQ_FLAGS_1, flags) != Drv::SpiStatus::SPI_OK) {
-            return false;
-        }
-        if ((flags & IrqFlags1::MODE_READY) != 0) {
-            return true;
-        }
-    }
-    return false;
+    // Clear any IRQ residue from before configuration (write 1 to clear, datasheet section 6.4)
+    return this->writeRegister(Reg::IRQ_FLAGS, 0xFF) == Drv::SpiStatus::SPI_OK;
 }
 
 bool Rfm9XManager ::requestMode(U8 mode) {
-    U8 opMode = 0;
-    if (this->readRegister(Reg::OP_MODE, opMode) != Drv::SpiStatus::SPI_OK) {
-        return false;
-    }
-    opMode = static_cast<U8>((opMode & static_cast<U8>(~Mode::MASK)) | (mode & Mode::MASK));
-    if (this->writeRegister(Reg::OP_MODE, opMode) != Drv::SpiStatus::SPI_OK) {
-        return false;
-    }
-    return true;
-}
-
-bool Rfm9XManager ::recoverReceive() {
-    // Flush FIFO (FifoOverrun clear), then stand by and re-enter RX so
-    // SyncAddressMatch cannot stick with a single leftover FIFO byte.
-    const bool fifoCleared =
-        this->writeRegister(Reg::IRQ_FLAGS_2, IrqFlags2::FIFO_OVERRUN) == Drv::SpiStatus::SPI_OK;
-    const bool standby = this->setMode(Mode::STANDBY);
-    const bool rx = this->setMode(Mode::RX);
-    const bool restarted = this->writeRegister(Reg::PACKET_CONFIG_2,
-                                                static_cast<U8>(PacketConfig2::AUTO_RX_RESTART_ON |
-                                                                PacketConfig2::RX_RESTART)) == Drv::SpiStatus::SPI_OK;
-    this->m_rxStaleSyncTicks = 0;
-    return fifoCleared && standby && rx && restarted;
-}
-
-bool Rfm9XManager ::setPowerBoost(bool enabled) {
-    if (enabled) {
-        // Enable is only supported for the +20 dBm setting.
-        Fw::ParamValid isValid = Fw::ParamValid::INVALID;
-        const Rfm9XTxPower txPowerParam = this->paramGet_TX_POWER(isValid);
-        if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
-            return false;
-        }
-        TxPowerSetting power{};
-        if (!getTxPowerSetting(txPowerParam, power)) {
-            return false;
-        }
-        if (!power.boost20dBm) {
-            return false;
-        }
-    }
-    // Disable always restores the safe OCP/TestPa values unconditionally: the
-    // TX_POWER parameter may have changed while a boosted transmit was in
-    // flight, and boost registers must never remain active in RX.
-    const U8 ocp = enabled ? Pa::OCP_DISABLED : Pa::OCP_NORMAL;
-    const U8 testPa1 = enabled ? Pa::TEST_PA_1_BOOST : Pa::TEST_PA_1_NORMAL;
-    const U8 testPa2 = enabled ? Pa::TEST_PA_2_BOOST : Pa::TEST_PA_2_NORMAL;
-    return (this->writeRegister(Reg::OCP, ocp) == Drv::SpiStatus::SPI_OK) &&
-           (this->writeRegister(Reg::TEST_PA_1, testPa1) == Drv::SpiStatus::SPI_OK) &&
-           (this->writeRegister(Reg::TEST_PA_2, testPa2) == Drv::SpiStatus::SPI_OK);
+    // LongRangeMode (bit 7) must stay set once configured; only the mode
+    // field (bits 2-0) changes here.
+    const U8 opMode = static_cast<U8>(Mode::LONG_RANGE_MODE | (mode & Mode::MASK));
+    return this->writeRegister(Reg::OP_MODE, opMode) == Drv::SpiStatus::SPI_OK;
 }
 
 bool Rfm9XManager ::channelBusy() {
-    // Software drain in progress, or SyncAddressMatch: uplink clocking in.
-    if (this->m_rxDraining) {
-        return true;
-    }
-    U8 flags = 0;
-    if (this->readRegister(Reg::IRQ_FLAGS_1, flags) != Drv::SpiStatus::SPI_OK) {
+    // LoRa has no SyncAddressMatch-equivalent IRQ bit; RegModemStat reports
+    // live demodulator activity (datasheet section 6.4, RegModemStat 0x18).
+    U8 stat = 0;
+    if (this->readRegister(Reg::MODEM_STAT, stat) != Drv::SpiStatus::SPI_OK) {
         // A bus fault reads as "clear" so the transmit path is taken and its
         // own SPI failure handling reports RADIO_FAULT instead of silently
         // deferring downlink forever on a dead bus.
         return false;
     }
-    return (flags & IrqFlags1::SYNC_ADDRESS_MATCH) != 0;
+    return (stat & static_cast<U8>(ModemStat::RX_ONGOING | ModemStat::SIGNAL_DETECTED)) != 0;
 }
 
 bool Rfm9XManager ::downlinkBlocked() {
@@ -255,31 +176,20 @@ bool Rfm9XManager ::writeFifo(const U8* data, FwSizeType size) {
 bool Rfm9XManager ::readFifo(U8* data, FwSizeType size) {
     FW_ASSERT(data != nullptr);
     FW_ASSERT((size + 1) <= sizeof this->m_mosi, static_cast<FwAssertArgType>(size));
-
-    // Some SPI transports corrupt long FIFO read transactions (see the
-    // RX_FIFO_SPI_CHUNK documentation), so the read is split into short
-    // transfers. The loop bound is provable: each iteration transfers at
-    // least one byte, so at most MAX_PACKET_PAYLOAD iterations occur.
-    FwSizeType offset = 0;
-    for (FwSizeType i = 0; (i < MAX_PACKET_PAYLOAD) && (offset < size); i++) {
-        const FwSizeType chunk = FW_MIN(size - offset, RX_FIFO_SPI_CHUNK);
-        this->m_mosi[0] = Reg::FIFO;
-        (void)::memset(&this->m_mosi[1], 0, chunk);
-        Fw::Buffer writeBuffer(this->m_mosi, chunk + 1);
-        Fw::Buffer readBuffer(this->m_miso, chunk + 1);
-        if (this->spiWriteRead_out(0, writeBuffer, readBuffer) != Drv::SpiStatus::SPI_OK) {
-            return false;
-        }
-        (void)::memcpy(data + offset, &this->m_miso[1], chunk);
-        offset += chunk;
+    this->m_mosi[0] = Reg::FIFO;
+    (void)::memset(&this->m_mosi[1], 0, size);
+    Fw::Buffer writeBuffer(this->m_mosi, size + 1);
+    Fw::Buffer readBuffer(this->m_miso, size + 1);
+    if (this->spiWriteRead_out(0, writeBuffer, readBuffer) != Drv::SpiStatus::SPI_OK) {
+        return false;
     }
-    return offset == size;
+    (void)::memcpy(data, &this->m_miso[1], size);
+    return true;
 }
 
 void Rfm9XManager ::abortTransmit() {
     this->log_WARNING_HI_SendFailed(Rfm9XSendFailure::RADIO_FAULT);
-    this->m_txWaitTicks = 0;
-    this->m_txState = TX_ABORT_CLEAR_FIFO;
+    this->m_txState = TX_ABORT_REQUEST_RX;
 }
 
 Rfm9XManager::TxProgress Rfm9XManager ::advanceTransmit() {
@@ -295,168 +205,68 @@ Rfm9XManager::TxProgress Rfm9XManager ::advanceTransmit() {
             if (!this->requestMode(Mode::STANDBY)) {
                 this->abortTransmit();
             } else {
-                this->m_txWaitTicks = 0;
-                this->m_txState = TX_WAIT_STANDBY;
+                this->m_txState = TX_SET_FIFO_PTR;
             }
             break;
 
-        case TX_WAIT_STANDBY:
-            if (this->readRegister(Reg::IRQ_FLAGS_1, flags) != Drv::SpiStatus::SPI_OK) {
-                this->abortTransmit();
-            } else if ((flags & IrqFlags1::MODE_READY) != 0) {
-                this->m_txState = TX_CLEAR_FIFO;
-            } else if (++this->m_txWaitTicks >= MODE_READY_TIMEOUT_TICKS) {
-                this->abortTransmit();
-            }
-            break;
-
-        case TX_CLEAR_FIFO:
-            if (this->writeRegister(Reg::IRQ_FLAGS_2, IrqFlags2::FIFO_OVERRUN) != Drv::SpiStatus::SPI_OK) {
+        case TX_SET_FIFO_PTR:
+            // LoRa Transmit Data FIFO Filling (datasheet section 4.1.5):
+            // "Set FifoPtrAddr to FifoTxPtrBase. Write PayloadLength bytes to FIFO."
+            if ((this->writeRegister(Reg::FIFO_ADDR_PTR, FIFO_BASE_ADDR) != Drv::SpiStatus::SPI_OK) ||
+                (this->writeRegister(Reg::PAYLOAD_LENGTH, static_cast<U8>(size)) != Drv::SpiStatus::SPI_OK) ||
+                (this->writeRegister(Reg::DIO_MAPPING_1, Dio0Mapping::TX_DONE) != Drv::SpiStatus::SPI_OK)) {
                 this->abortTransmit();
             } else {
-                this->m_txState = TX_WRITE_LENGTH;
+                this->m_txState = TX_WRITE_PAYLOAD;
             }
             break;
 
-        case TX_WRITE_LENGTH:
-            if (this->writeRegister(Reg::FIFO, static_cast<U8>(size)) != Drv::SpiStatus::SPI_OK) {
+        case TX_WRITE_PAYLOAD:
+            // Single standby fill: the 256-byte LoRa FIFO holds the full
+            // 255-byte max payload in one burst (no in-flight top-up needed).
+            if (!this->writeFifo(data, size)) {
                 this->abortTransmit();
             } else {
-                this->m_txState = TX_LOAD_INITIAL;
+                this->m_txState = TX_REQUEST_TX;
             }
             break;
 
-        case TX_LOAD_INITIAL: {
-            // FIFO is 66 bytes. Variable-length mode consumes one length byte,
-            // leaving 65 payload bytes for the initial standby preload.
-            const FwSizeType initial = FW_MIN(size, FIFO_SIZE - 1);
-            if (!this->writeFifo(data, initial)) {
-                this->abortTransmit();
-            } else {
-                this->m_txOffset = initial;
-                this->m_txState = TX_ENABLE_BOOST;
-            }
-            break;
-        }
-
-        case TX_ENABLE_BOOST: {
-            Fw::ParamValid isValid = Fw::ParamValid::INVALID;
-            const Rfm9XTxPower txPowerParam = this->paramGet_TX_POWER(isValid);
-            TxPowerSetting power{};
-            if (((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) ||
-                !getTxPowerSetting(txPowerParam, power)) {
-                this->abortTransmit();
-            } else if (power.boost20dBm && !this->setPowerBoost(true)) {
-                this->abortTransmit();
-            } else {
-                this->m_txBoostEnabled = power.boost20dBm;
-                this->m_txState = TX_REQUEST_MODE;
-            }
-            break;
-        }
-
-        case TX_REQUEST_MODE:
+        case TX_REQUEST_TX:
             if (!this->requestMode(Mode::TX)) {
                 this->abortTransmit();
             } else {
                 this->m_txWaitTicks = 0;
-                this->m_txElapsedTicks = 0;
-                this->m_txState = TX_WAIT_MODE;
+                this->m_txState = TX_WAIT_TXDONE;
             }
             break;
 
-        case TX_WAIT_MODE:
-            if (this->readRegister(Reg::IRQ_FLAGS_1, flags) != Drv::SpiStatus::SPI_OK) {
+        case TX_WAIT_TXDONE:
+            if (this->readRegister(Reg::IRQ_FLAGS, flags) != Drv::SpiStatus::SPI_OK) {
                 this->abortTransmit();
-            } else if ((flags & IrqFlags1::MODE_READY) != 0) {
-                this->m_txState = TX_STREAM;
-            } else if (++this->m_txWaitTicks >= MODE_READY_TIMEOUT_TICKS) {
-                this->abortTransmit();
-            }
-            break;
-
-        case TX_STREAM:
-            if (++this->m_txElapsedTicks >= this->m_txTimeoutTicks) {
-                this->abortTransmit();
-                break;
-            }
-            if (this->readRegister(Reg::IRQ_FLAGS_2, flags) != Drv::SpiStatus::SPI_OK) {
-                this->abortTransmit();
-                break;
-            }
-            // Below FifoThreshold there is room for TX_TOP_UP_CHUNK without
-            // risking FifoOverrun. At most one bounded burst is written per tick.
-            if ((this->m_txOffset < size) && ((flags & IrqFlags2::FIFO_FULL) == 0) &&
-                ((flags & IrqFlags2::FIFO_LEVEL) == 0)) {
-                const FwSizeType chunk = FW_MIN(size - this->m_txOffset, TX_TOP_UP_CHUNK);
-                if (!this->writeFifo(&data[this->m_txOffset], chunk)) {
-                    this->abortTransmit();
-                } else {
-                    this->m_txOffset += chunk;
-                }
-            } else if ((this->m_txOffset >= size) && ((flags & IrqFlags2::PACKET_SENT) != 0)) {
+            } else if ((flags & IrqFlags::TX_DONE) != 0) {
+                (void)this->writeRegister(Reg::IRQ_FLAGS, IrqFlags::TX_DONE);
                 this->m_txState = TX_REQUEST_RX;
+            } else if (++this->m_txWaitTicks >= TX_DONE_TIMEOUT_TICKS) {
+                this->abortTransmit();
             }
             break;
 
         case TX_REQUEST_RX:
-            if (!this->requestMode(Mode::RX)) {
-                this->abortTransmit();
-            } else {
-                this->m_txWaitTicks = 0;
-                this->m_txState = TX_WAIT_RX;
-            }
-            break;
-
-        case TX_WAIT_RX:
-            if (this->readRegister(Reg::IRQ_FLAGS_1, flags) != Drv::SpiStatus::SPI_OK) {
-                this->abortTransmit();
-            } else if ((flags & IrqFlags1::MODE_READY) != 0) {
-                this->m_txState = TX_DISABLE_BOOST;
-            } else if (++this->m_txWaitTicks >= MODE_READY_TIMEOUT_TICKS) {
-                this->abortTransmit();
-            }
-            break;
-
-        case TX_DISABLE_BOOST:
-            if (this->m_txBoostEnabled && !this->setPowerBoost(false)) {
+            if ((this->writeRegister(Reg::DIO_MAPPING_1, Dio0Mapping::RX_DONE) != Drv::SpiStatus::SPI_OK) ||
+                !this->requestMode(Mode::RX_CONTINUOUS)) {
                 this->abortTransmit();
                 break;
             }
-            this->m_txBoostEnabled = false;
             this->m_packetsTransmitted++;
             this->tlmWrite_PacketsTransmitted(this->m_packetsTransmitted);
             this->log_WARNING_HI_ConfigurationFailed_ThrottleClear();
             this->log_WARNING_HI_SendFailed_ThrottleClear();
             return TX_SUCCEEDED;
 
-        case TX_ABORT_CLEAR_FIFO:
-            (void)this->writeRegister(Reg::IRQ_FLAGS_2, IrqFlags2::FIFO_OVERRUN);
-            this->m_txState = TX_ABORT_REQUEST_RX;
-            break;
-
         case TX_ABORT_REQUEST_RX:
-            this->m_txWaitTicks = 0;
-            if (this->requestMode(Mode::RX)) {
-                this->m_txState = TX_ABORT_WAIT_RX;
-            } else {
-                this->m_txState = TX_ABORT_DISABLE_BOOST;
-            }
-            break;
-
-        case TX_ABORT_WAIT_RX:
-            if ((this->readRegister(Reg::IRQ_FLAGS_1, flags) != Drv::SpiStatus::SPI_OK) ||
-                ((flags & IrqFlags1::MODE_READY) != 0) ||
-                (++this->m_txWaitTicks >= MODE_READY_TIMEOUT_TICKS)) {
-                this->m_txState = TX_ABORT_DISABLE_BOOST;
-            }
-            break;
-
-        case TX_ABORT_DISABLE_BOOST:
-            if (this->m_txBoostEnabled) {
-                (void)this->setPowerBoost(false);
-            }
-            this->m_txBoostEnabled = false;
+            (void)this->writeRegister(Reg::IRQ_FLAGS, 0xFF);
+            (void)this->writeRegister(Reg::DIO_MAPPING_1, Dio0Mapping::RX_DONE);
+            (void)this->requestMode(Mode::RX_CONTINUOUS);
             return TX_FAILED;
 
         case TX_IDLE:
@@ -467,11 +277,16 @@ Rfm9XManager::TxProgress Rfm9XManager ::advanceTransmit() {
     return TX_IN_PROGRESS;
 }
 
-void Rfm9XManager ::updateRssi() {
+void Rfm9XManager ::updateRssiSnr() {
     U8 rssi = 0;
-    if (this->readRegister(Reg::RSSI_VALUE, rssi) == Drv::SpiStatus::SPI_OK) {
-        // RSSI (dBm) = -RssiValue / 2 (datasheet section 6, RegRssiValue)
-        this->tlmWrite_LastRssi(-static_cast<F32>(rssi) / 2.0f);
+    if (this->readRegister(Reg::PKT_RSSI_VALUE, rssi) == Drv::SpiStatus::SPI_OK) {
+        // RSSI [dBm] = -137 + PacketRssi (datasheet section 6.4, RegPktRssiValue)
+        this->tlmWrite_LastPacketRssi(-137.0f + static_cast<F32>(rssi));
+    }
+    U8 snr = 0;
+    if (this->readRegister(Reg::PKT_SNR_VALUE, snr) == Drv::SpiStatus::SPI_OK) {
+        // SNR [dB] = PacketSnr (two's complement) / 4 (datasheet section 6.4, RegPktSnrValue)
+        this->tlmWrite_LastPacketSnr(static_cast<F32>(static_cast<I8>(snr)) / 4.0f);
     }
 }
 
