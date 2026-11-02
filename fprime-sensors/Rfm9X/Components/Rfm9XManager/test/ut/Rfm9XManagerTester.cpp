@@ -1,0 +1,998 @@
+// ======================================================================
+// \title  Rfm9XManagerTester.cpp
+// \brief  cpp file for Rfm9XManager component test harness implementation class
+// ======================================================================
+
+#include "Rfm9XManagerTester.hpp"
+
+namespace Rfm9X {
+
+// ----------------------------------------------------------------------
+// Construction and destruction
+// ----------------------------------------------------------------------
+
+Rfm9XManagerTester ::Rfm9XManagerTester(bool localHold)
+    : Rfm9XManagerGTestBase("Rfm9XManagerTester", Rfm9XManagerTester::MAX_HISTORY_SIZE),
+      component("Rfm9XManager"),
+      m_model(),
+      m_spiFail(false),
+      m_allocFail(false),
+      m_allocation{} {
+    this->initComponents();
+    if (localHold) {
+        this->connectPortsLocalHold();
+    } else {
+        this->connectPorts();
+    }
+}
+
+void Rfm9XManagerTester ::connectPortsLocalHold() {
+    // Mirrors the autocoded connectPorts() minus comStatusOut: the component
+    // detects the unconnected port and selects local pending-TX hold mode.
+    this->connect_to_CmdDisp(0, this->component.get_CmdDisp_InputPort(0));
+    this->component.set_CmdReg_OutputPort(0, this->get_from_CmdReg(0));
+    this->component.set_CmdStatus_OutputPort(0, this->get_from_CmdStatus(0));
+    this->component.set_logOut_OutputPort(0, this->get_from_logOut(0));
+#if FW_ENABLE_TEXT_LOGGING == 1
+    this->component.set_logTextOut_OutputPort(0, this->get_from_logTextOut(0));
+#endif
+    this->component.set_prmGet_OutputPort(0, this->get_from_prmGet(0));
+    this->component.set_prmSet_OutputPort(0, this->get_from_prmSet(0));
+    this->component.set_timeCaller_OutputPort(0, this->get_from_timeCaller(0));
+    this->component.set_tlmOut_OutputPort(0, this->get_from_tlmOut(0));
+    this->connect_to_dataIn(0, this->component.get_dataIn_InputPort(0));
+    this->connect_to_dataReturnIn(0, this->component.get_dataReturnIn_InputPort(0));
+    this->connect_to_run(0, this->component.get_run_InputPort(0));
+    this->component.set_allocate_OutputPort(0, this->get_from_allocate(0));
+    this->component.set_dataOut_OutputPort(0, this->get_from_dataOut(0));
+    this->component.set_dataReturnOut_OutputPort(0, this->get_from_dataReturnOut(0));
+    this->component.set_deallocate_OutputPort(0, this->get_from_deallocate(0));
+    this->component.set_resetGpio_OutputPort(0, this->get_from_resetGpio(0));
+    this->component.set_spiWriteRead_OutputPort(0, this->get_from_spiWriteRead(0));
+}
+
+Rfm9XManagerTester ::~Rfm9XManagerTester() {}
+
+// ----------------------------------------------------------------------
+// Handlers for typed from ports
+// ----------------------------------------------------------------------
+
+Drv::SpiStatus Rfm9XManagerTester ::from_spiWriteRead_handler(FwIndexType portNum,
+                                                              Fw::Buffer& writeBuffer,
+                                                              Fw::Buffer& readBuffer) {
+    this->pushFromPortEntry_spiWriteRead(writeBuffer, readBuffer);
+    if (this->m_spiFail) {
+        return Drv::SpiStatus::SPI_WRITE_ERR;
+    }
+    EXPECT_EQ(writeBuffer.getSize(), readBuffer.getSize());
+    this->m_model.spiTransaction(writeBuffer.getData(), readBuffer.getData(), writeBuffer.getSize());
+    return Drv::SpiStatus::SPI_OK;
+}
+
+Fw::Buffer Rfm9XManagerTester ::from_allocate_handler(FwIndexType portNum, FwSizeType size) {
+    this->pushFromPortEntry_allocate(size);
+    if (this->m_allocFail || (size > sizeof this->m_allocation)) {
+        return Fw::Buffer();
+    }
+    return Fw::Buffer(this->m_allocation, size);
+}
+
+// ----------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------
+
+void Rfm9XManagerTester ::setParameters(const Rfm9XDataRate& dataRate,
+                                        const Rfm9XBandwidth& bandwidthRx,
+                                        const Rfm9XTxPower& txPower) {
+    this->paramSet_DATA_RATE(dataRate, Fw::ParamValid::VALID);
+    this->paramSet_BANDWIDTH_RX(bandwidthRx, Fw::ParamValid::VALID);
+    this->paramSet_TX_POWER(txPower, Fw::ParamValid::VALID);
+}
+
+void Rfm9XManagerTester ::setDefaultParameters() {
+    // Match FPP defaults + ground-station image (BR_19200 / BW_500_KHZ / DBM_13).
+    const Rfm9XDataRate dataRate = Rfm9XDataRate::BR_19200;
+    const Rfm9XBandwidth bandwidthRx = Rfm9XBandwidth::BW_500_KHZ;
+    const Rfm9XTxPower txPower = Rfm9XTxPower::DBM_13;
+    this->setParameters(dataRate, bandwidthRx, txPower);
+}
+
+void Rfm9XManagerTester ::makeReady() {
+    this->setDefaultParameters();
+    this->component.loadParameters();
+    this->runUntilReady();
+    ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    this->clearHistory();
+}
+
+void Rfm9XManagerTester ::runTicks(U32 count) {
+    for (U32 tick = 0; tick < count; tick++) {
+        this->invoke_to_run(0, 0);
+    }
+}
+
+void Rfm9XManagerTester ::runUntilReady(U32 maxTicks) {
+    // Bring-up is tick-driven: reset pulse, settle, detect, then configure.
+    for (U32 tick = 0; tick < maxTicks; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->eventsSize_RadioReady > 0) {
+            return;
+        }
+    }
+    FAIL() << "RFM9X bring-up did not reach READY within " << maxTicks << " run ticks";
+}
+
+void Rfm9XManagerTester ::runUntilTransmitCompletes(U32 maxTicks) {
+    for (U32 tick = 0; tick < maxTicks; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_comStatusOut->size() > 0) {
+            return;
+        }
+    }
+    FAIL() << "staged RFM9X transmit did not complete within " << maxTicks << " run ticks";
+}
+
+// ----------------------------------------------------------------------
+// Tests
+// ----------------------------------------------------------------------
+
+void Rfm9XManagerTester ::test_initialization() {
+    // Before FPP parameters are loaded, run must not touch the radio.
+    this->invoke_to_run(0, 0);
+    ASSERT_from_spiWriteRead_SIZE(0);
+    ASSERT_from_resetGpio_SIZE(0);
+    ASSERT_EVENTS_SIZE(0);
+
+    // Loading parameters performs no bus work in command/registration context;
+    // the tick-driven bring-up sequence then reaches READY.
+    this->setDefaultParameters();
+    this->component.loadParameters();
+    ASSERT_from_spiWriteRead_SIZE(0);
+    ASSERT_from_resetGpio_SIZE(0);
+    this->runUntilReady();
+    ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
+    ASSERT_EVENTS_RadioReady_SIZE(1);
+    // Optional RST GPIO is connected in the harness: expect one HIGH then LOW pulse.
+    ASSERT_from_resetGpio_SIZE(2);
+    ASSERT_from_resetGpio(0, Fw::Logic::HIGH);
+    ASSERT_from_resetGpio(1, Fw::Logic::LOW);
+    // Initial com status is SUCCESS (ready for the first frame)
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_TLM_RadioState(this->tlmHistory_RadioState->size() - 1, Rfm9XRadioState::READY);
+}
+
+void Rfm9XManagerTester ::test_detection_retry() {
+    this->setDefaultParameters();
+    // SPI failure during bring-up: radio not detected
+    this->m_spiFail = true;
+    this->component.loadParameters();
+    this->runTicks(16);
+    ASSERT_GT(this->eventHistory_ConfigurationFailed->size(), 0u);
+    ASSERT_EVENTS_ConfigurationFailed(0, Rfm9XMode::Receive);
+    ASSERT_from_comStatusOut_SIZE(0);
+    // Radio (SPI) recovers: detection retries on run and succeeds
+    this->m_spiFail = false;
+    this->clearHistory();
+    this->runUntilReady();
+    ASSERT_from_comStatusOut_SIZE(1);
+}
+
+void Rfm9XManagerTester ::test_detection_radio_absent() {
+    this->setDefaultParameters();
+    // An unpowered/absent radio answers every SPI read with zeros
+    this->m_model.setRadioPresent(false);
+    this->component.loadParameters();
+    this->runTicks(16);
+    ASSERT_GT(this->eventHistory_ConfigurationFailed->size(), 0u);
+    ASSERT_from_comStatusOut_SIZE(0);
+    // Radio powered up: detection retries on later ticks and succeeds
+    this->m_model.setRadioPresent(true);
+    this->clearHistory();
+    this->runUntilReady();
+    ASSERT_from_comStatusOut_SIZE(1);
+}
+
+void Rfm9XManagerTester ::test_transmit_channel_busy() {
+    this->makeReady();
+    // A carrier on the channel asserts Rssi/SyncAddressMatch in RX:
+    // listen-before-talk must defer the downlink with FAILURE.
+    this->m_model.setChannelBusy(true);
+    U8 data[16] = {0x5A};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+
+    // Channel clears: the same frame now transmits
+    this->m_model.setChannelBusy(false);
+    this->clearHistory();
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_TLM_PacketsTransmitted(0, 1);
+}
+
+void Rfm9XManagerTester ::test_transmit_mode_settle() {
+    // Model oscillator/PLL settling: ModeReady lags each mode change.
+    this->m_model.setModeSettleByteTimes(24);
+    this->makeReady();
+    U8 data[32];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>(i ^ 0x3C);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_EVENTS_SendFailed_SIZE(0);
+    U8 transmitted[MAX_PACKET_PAYLOAD + 1];
+    const FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, sizeof data);
+    for (FwSizeType i = 0; i < size; i++) {
+        ASSERT_EQ(transmitted[i], data[i]);
+    }
+}
+
+void Rfm9XManagerTester ::test_transmit() {
+    this->makeReady();
+    U8 data[32];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>(i);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+
+    // Transmission succeeded and the buffer was returned
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_TLM_PacketsTransmitted(0, 1);
+
+    // The model "transmitted" exactly the payload
+    U8 transmitted[MAX_PACKET_PAYLOAD + 1];
+    const FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, sizeof data);
+    for (FwSizeType i = 0; i < size; i++) {
+        ASSERT_EQ(transmitted[i], data[i]);
+    }
+    // No second packet pending
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), 0);
+}
+
+void Rfm9XManagerTester ::test_transmit_zero_size() {
+    this->makeReady();
+    U8 data[1] = {0};
+    Fw::Buffer buffer(data, 0);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_EVENTS_SendFailed_SIZE(1);
+    ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::INVALID_SIZE);
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), 0);
+}
+
+void Rfm9XManagerTester ::test_transmit_oversize() {
+    this->makeReady();
+    U8 data[MAX_PACKET_PAYLOAD + 1];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>(i);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_EVENTS_SendFailed_SIZE(1);
+    ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::INVALID_SIZE);
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), 0);
+}
+
+void Rfm9XManagerTester ::test_transmit_large() {
+    this->makeReady();
+    // A full 255-byte packet: larger than the 66-byte FIFO, so it must
+    // stream through with in-transmission top-ups
+    U8 data[MAX_PACKET_PAYLOAD];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>((i * 7) & 0xFF);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_TLM_PacketsTransmitted(0, 1);
+
+    U8 transmitted[MAX_PACKET_PAYLOAD + 1];
+    const FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, sizeof data);
+    for (FwSizeType i = 0; i < size; i++) {
+        ASSERT_EQ(transmitted[i], data[i]);
+    }
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), 0);
+}
+
+void Rfm9XManagerTester ::test_transmit_fifo_fit() {
+    this->makeReady();
+    U8 data[FIFO_FIT_PAYLOAD];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>((i * 11) & 0xFF);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_TLM_PacketsTransmitted(0, 1);
+
+    U8 transmitted[MAX_PACKET_PAYLOAD + 1];
+    const FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, sizeof data);
+    for (FwSizeType i = 0; i < size; i++) {
+        ASSERT_EQ(transmitted[i], data[i]);
+    }
+}
+
+void Rfm9XManagerTester ::test_receive_large() {
+    this->makeReady();
+    // A full 255-byte packet must stream through the 66-byte FIFO across
+    // budgeted 1 kHz run ticks (SPI ops advance the sim air clock).
+    U8 data[MAX_PACKET_PAYLOAD];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>((i * 3) & 0xFF);
+    }
+    this->m_model.injectAirData(data, sizeof data);
+    for (U32 tick = 0; tick < 512; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() > 0) {
+            break;
+        }
+    }
+
+    ASSERT_from_dataOut_SIZE(1);
+    ASSERT_TLM_PacketsReceived(0, 1);
+    const Fw::Buffer& received = this->fromPortHistory_dataOut->at(0).data;
+    ASSERT_EQ(received.getSize(), sizeof data);
+    for (FwSizeType i = 0; i < received.getSize(); i++) {
+        ASSERT_EQ(received.getData()[i], data[i]);
+    }
+    // RxRestart is a self-clearing command bit; the model must be ready to
+    // accept the next packet without carrying stale FIFO state forward.
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::PACKET_CONFIG_2), 0x02);
+}
+
+void Rfm9XManagerTester ::test_receive_fifo_fit() {
+    this->makeReady();
+    U8 data[FIFO_FIT_PAYLOAD];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>((i * 5) & 0xFF);
+    }
+    this->m_model.injectAirData(data, sizeof data);
+    // The simulated air clock advances at half the SPI byte rate. With the
+    // half-FIFO watermark and an 8-tick idle poll divider, allow enough ticks
+    // to cross FifoLevel and finish the packet.
+    for (U32 tick = 0; tick < 1024; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() > 0) {
+            break;
+        }
+    }
+
+    ASSERT_from_dataOut_SIZE(1);
+    ASSERT_TLM_PacketsReceived(0, 1);
+    const Fw::Buffer& received = this->fromPortHistory_dataOut->at(0).data;
+    ASSERT_EQ(received.getSize(), sizeof data);
+    for (FwSizeType i = 0; i < received.getSize(); i++) {
+        ASSERT_EQ(received.getData()[i], data[i]);
+    }
+}
+
+void Rfm9XManagerTester ::test_default_register_image() {
+    this->makeReady();
+    // This is the canonical default enum image mirrored by the ground station:
+    // BR_19200 / BW_500_KHZ / DBM_13 plus the fixed native-packet profile.
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::DATA_MODUL), 0x00);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::BITRATE_MSB), 0x06);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::BITRATE_LSB), 0x83);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FDEV_MSB), 0x01);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FDEV_LSB), 0x9A);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::RX_BW), 0xE0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::AFC_BW), 0xE0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::PA_LEVEL), 0x5F);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::OCP), Pa::OCP_NORMAL);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::TEST_PA_1), Pa::TEST_PA_1_NORMAL);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::TEST_PA_2), Pa::TEST_PA_2_NORMAL);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FRF_MSB), 0xE4);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FRF_MID), 0xC0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FRF_LSB), 0x00);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::SYNC_VALUE_2), 0xA7);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::PACKET_CONFIG_1), 0xD0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::PAYLOAD_LENGTH), 0xFF);
+}
+
+void Rfm9XManagerTester ::test_high_power_boost_recovery() {
+    this->makeReady();
+
+    // Change only TX_POWER through the generated parameter command. The
+    // normal configured image keeps boost disabled until a packet is sent.
+    const Rfm9XTxPower txPower = Rfm9XTxPower::DBM_20;
+    this->paramSet_TX_POWER(txPower, Fw::ParamValid::VALID);
+    this->paramSend_TX_POWER(0, 0);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_TX_POWER_SET, 0, Fw::CmdResponse::OK);
+    this->invoke_to_run(0, 0);
+    ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::PA_LEVEL), 0x7F);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::OCP), Pa::OCP_NORMAL);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::TEST_PA_1), Pa::TEST_PA_1_NORMAL);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::TEST_PA_2), Pa::TEST_PA_2_NORMAL);
+
+    // The simulator's write history makes the short boost interval observable
+    // even though the scheduler-driven TX sequence restores normal RX settings
+    // before it reports completion.
+    this->m_model.clearRegisterWriteHistory();
+    this->clearHistory();
+    U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_TRUE(this->m_model.wasRegisterWritten(Reg::OCP, Pa::OCP_DISABLED));
+    ASSERT_TRUE(this->m_model.wasRegisterWritten(Reg::TEST_PA_1, Pa::TEST_PA_1_BOOST));
+    ASSERT_TRUE(this->m_model.wasRegisterWritten(Reg::TEST_PA_2, Pa::TEST_PA_2_BOOST));
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::OCP), Pa::OCP_NORMAL);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::TEST_PA_1), Pa::TEST_PA_1_NORMAL);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::TEST_PA_2), Pa::TEST_PA_2_NORMAL);
+}
+
+void Rfm9XManagerTester ::test_data_rate_register_map() {
+    const struct {
+        Rfm9XDataRate dataRate;
+        U16 bitrateRegister;
+    } expected[] = {
+        {Rfm9XDataRate::BR_1200, 0x682B},
+        {Rfm9XDataRate::BR_4800, 0x1A0B},
+        {Rfm9XDataRate::BR_9600, 0x0D05},
+        {Rfm9XDataRate::BR_19200, 0x0683},
+        {Rfm9XDataRate::BR_38400, 0x0341},
+    };
+    for (const auto& item : expected) {
+        DataRateSetting setting{};
+        ASSERT_TRUE(getDataRateSetting(item.dataRate, setting));
+        ASSERT_EQ(setting.bitrateReg, item.bitrateRegister);
+    }
+}
+
+void Rfm9XManagerTester ::test_bandwidth_update_reconfigure() {
+    this->makeReady();
+
+    // Parameter-set commands call parameterUpdated(), which schedules
+    // CONFIGURE for the next rate-group tick (no SPI in command context).
+    const Rfm9XBandwidth bandwidthRx = Rfm9XBandwidth::BW_200_KHZ;
+    this->paramSet_BANDWIDTH_RX(bandwidthRx, Fw::ParamValid::VALID);
+    this->paramSend_BANDWIDTH_RX(0, 0);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_BANDWIDTH_RX_SET, 0, Fw::CmdResponse::OK);
+    ASSERT_from_spiWriteRead_SIZE(0);
+
+    this->invoke_to_run(0, 0);
+    ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
+    ASSERT_from_comStatusOut_SIZE(0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::RX_BW), 0xE9);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::AFC_BW), 0xE9);
+
+    this->clearHistory();
+    U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), sizeof data);
+}
+
+void Rfm9XManagerTester ::test_bandwidth_register_map() {
+    const struct {
+        Rfm9XBandwidth bandwidth;
+        U8 registerValue;
+    } expected[] = {
+        {Rfm9XBandwidth::BW_100_KHZ, 0xEA},
+        {Rfm9XBandwidth::BW_200_KHZ, 0xE9},
+        {Rfm9XBandwidth::BW_250_KHZ, 0xE1},
+        {Rfm9XBandwidth::BW_500_KHZ, 0xE0},
+    };
+
+    for (const auto& entry : expected) {
+        BandwidthSetting setting{};
+        ASSERT_TRUE(getBandwidthSetting(entry.bandwidth, setting));
+        ASSERT_EQ(setting.rxBw, entry.registerValue);
+        ASSERT_EQ(setting.afcBw, entry.registerValue);
+    }
+}
+
+void Rfm9XManagerTester ::test_parameter_update_reconfigure() {
+    this->makeReady();
+
+    // parameterUpdated() defers reconfiguration to the next rate-group tick
+    // rather than touching SPI in command-dispatch context.
+    const Rfm9XDataRate dataRate = Rfm9XDataRate::BR_19200;
+    this->paramSet_DATA_RATE(dataRate, Fw::ParamValid::VALID);
+    this->paramSend_DATA_RATE(0, 0);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_DATA_RATE_SET, 0, Fw::CmdResponse::OK);
+    ASSERT_from_spiWriteRead_SIZE(0);
+
+    this->invoke_to_run(0, 0);
+    ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::BITRATE_MSB), 0x06);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::BITRATE_LSB), 0x83);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::DATA_MODUL), 0x00);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FDEV_MSB), 0x01);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FDEV_LSB), 0x9A);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::RX_BW), 0xE0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::AFC_BW), 0xE0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FRF_MSB), 0xE4);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FRF_MID), 0xC0);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::FRF_LSB), 0x00);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::SYNC_VALUE_2), 0xA7);
+    ASSERT_from_comStatusOut_SIZE(0);
+
+    this->clearHistory();
+    U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), sizeof data);
+}
+
+void Rfm9XManagerTester ::test_reset_recovery() {
+    this->makeReady();
+
+    this->sendCmd_RESET(0, 0);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_RESET, 0, Fw::CmdResponse::OK);
+    ASSERT_EVENTS_ResetInitiated_SIZE(1);
+    // The command itself performs no GPIO work; the pulse is tick-driven.
+    ASSERT_from_resetGpio_SIZE(0);
+
+    // Subsequent scheduler ticks pulse RST, redetect, and configure the model.
+    // The startup Com SUCCESS is intentionally not repeated after a reset.
+    this->runUntilReady();
+    ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
+    ASSERT_from_resetGpio_SIZE(2);
+    ASSERT_from_resetGpio(0, Fw::Logic::HIGH);
+    ASSERT_from_resetGpio(1, Fw::Logic::LOW);
+    ASSERT_from_comStatusOut_SIZE(0);
+
+    this->clearHistory();
+    U8 data[8] = {7, 6, 5, 4, 3, 2, 1, 0};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), sizeof data);
+}
+
+void Rfm9XManagerTester ::test_transmit_dropped_when_busy() {
+    this->makeReady();
+    // A reception in progress: SyncAddressMatch is asserted by the model
+    U8 uplink[40];
+    for (FwSizeType i = 0; i < sizeof uplink; i++) {
+        uplink[i] = static_cast<U8>(i);
+    }
+    this->m_model.injectAirData(uplink, sizeof uplink);
+
+    // Half-duplex: defer downlink with FAILURE so ComQueue can pause
+    U8 data[32] = {0xA5};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_EVENTS_SendFailed_SIZE(0);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    U8 transmitted[MAX_PACKET_PAYLOAD + 1];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), 0);
+
+    // Adaptive idle polling may need several 1 kHz ticks to reach FifoLevel.
+    // Post-RX TX holdoff defers the Com SUCCESS resume after delivery.
+    this->clearHistory();
+    for (U32 tick = 0; tick < 1024; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() > 0) {
+            break;
+        }
+    }
+    ASSERT_from_dataOut_SIZE(1);
+    ASSERT_from_comStatusOut_SIZE(0);
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+}
+
+void Rfm9XManagerTester ::test_downlink_starvation_recovery() {
+    this->makeReady();
+
+    // Periodic uplink shorter than the RX lease keeps re-arming it forever.
+    U8 uplink[16];
+    for (FwSizeType i = 0; i < sizeof uplink; i++) {
+        uplink[i] = static_cast<U8>(i);
+    }
+    this->m_model.injectAirData(uplink, sizeof uplink);
+    for (U32 tick = 0; (tick < 1024) && (this->fromPortHistory_dataOut->size() == 0); tick++) {
+        this->invoke_to_run(0, 0);
+    }
+    ASSERT_from_dataOut_SIZE(1);
+
+    // A downlink attempt during the lease is deferred with FAILURE.
+    U8 data[32] = {0x5A};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+
+    // Re-arm the lease more often than it can decay. The starvation cap must
+    // still open a downlink window and resume ComQueue with SUCCESS.
+    this->clearHistory();
+    bool resumed = false;
+    const U32 keepaliveTicks = Rfm9XManager::RX_TX_HOLDOFF_TICKS - 100;
+    const U32 bound = 3 * Rfm9XManager::RX_HOLDOFF_STARVATION_TICKS;
+    for (U32 tick = 0; tick < bound; tick++) {
+        if ((tick % keepaliveTicks) == (keepaliveTicks - 1)) {
+            this->m_model.injectAirData(uplink, sizeof uplink);
+        }
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_comStatusOut->size() > 0) {
+            resumed = true;
+            break;
+        }
+    }
+    ASSERT_TRUE(resumed);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+}
+
+void Rfm9XManagerTester ::test_transmit_not_ready() {
+    // No initialization: transmission must be refused with FAILURE status.
+    // The refusal is deliberate flow control, not a fault: FAILURE pauses
+    // ComQueue, and bring-up problems are already reported through
+    // ConfigurationFailed, so no SendFailed event is emitted here.
+    U8 data[8] = {0};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    ASSERT_EVENTS_SendFailed_SIZE(0);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_from_spiWriteRead_SIZE(0);
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+}
+
+void Rfm9XManagerTester ::test_transmit_spi_failure() {
+    this->makeReady();
+    this->m_spiFail = true;
+    U8 data[8] = {0};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_EVENTS_SendFailed_SIZE(1);
+    ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::RADIO_FAULT);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+}
+
+void Rfm9XManagerTester ::test_transmit_timeout_recovery() {
+    this->makeReady();
+    this->m_model.setPacketSentStall(true);
+    U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+
+    ASSERT_EVENTS_SendFailed_SIZE(1);
+    ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::RADIO_FAULT);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_EQ(this->m_model.readRegisterValue(Reg::OP_MODE) & Mode::MASK, Mode::RX);
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), 0);
+
+    // Remove the fault and prove the same radio model can transmit again.
+    this->m_model.setPacketSentStall(false);
+    this->clearHistory();
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    const FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, sizeof data);
+    for (FwSizeType i = 0; i < size; i++) {
+        ASSERT_EQ(transmitted[i], data[i]);
+    }
+}
+
+void Rfm9XManagerTester ::test_receive() {
+    this->makeReady();
+    // Inject 300 bytes: delivered as a 255-byte and a 45-byte packet
+    U8 data[300];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>(0xFF - (i & 0xFF));
+    }
+    this->m_model.injectAirData(data, sizeof data);
+    for (U32 tick = 0; tick < 1024; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() >= 2) {
+            break;
+        }
+    }
+
+    ASSERT_from_dataOut_SIZE(2);
+    ASSERT_TLM_PacketsReceived(1, 2);
+    ASSERT_TLM_LastRssi(0, -40.0f);
+    const Fw::Buffer& first = this->fromPortHistory_dataOut->at(0).data;
+    const Fw::Buffer& second = this->fromPortHistory_dataOut->at(1).data;
+    ASSERT_EQ(first.getSize(), 255u);
+    ASSERT_EQ(second.getSize(), 45u);
+    for (FwSizeType i = 0; i < second.getSize(); i++) {
+        ASSERT_EQ(second.getData()[i], data[255 + i]);
+    }
+}
+
+void Rfm9XManagerTester ::test_receive_allocation_failure() {
+    this->makeReady();
+    U8 data[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    this->m_model.injectAirData(data, sizeof data);
+    this->m_allocFail = true;
+    for (U32 tick = 0; tick < 512; tick++) {
+        this->invoke_to_run(0, 0);
+    }
+    // Packet dropped with an event; nothing delivered downstream
+    ASSERT_EVENTS_AllocationFailed_SIZE(1);
+    ASSERT_EVENTS_AllocationFailed(0, sizeof data);
+    ASSERT_from_dataOut_SIZE(0);
+    // Link stays alive: a later packet is delivered once allocation recovers
+    this->m_allocFail = false;
+    this->clearHistory();
+    this->m_model.injectAirData(data, sizeof data);
+    for (U32 tick = 0; tick < 512; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() > 0) {
+            break;
+        }
+    }
+    ASSERT_from_dataOut_SIZE(1);
+}
+
+void Rfm9XManagerTester ::test_receive_crc_drop() {
+    this->makeReady();
+    // A frame whose byte count completes but whose CRC fails: the model streams
+    // the declared payload (plus trailing noise so FifoLevel stays asserted) yet
+    // never asserts PayloadReady, exactly as an RFM9X with CrcOn + CrcAutoClear
+    // behaves on corruption. The manager must drop it, not forward garbage.
+    this->m_model.injectCorruptFrame(40);
+    for (U32 tick = 0; tick < 1024; tick++) {
+        this->invoke_to_run(0, 0);
+    }
+    // Nothing delivered to the deframer; the drop is counted in telemetry.
+    ASSERT_from_dataOut_SIZE(0);
+    ASSERT_TLM_RxCrcErrors_SIZE(1);
+    ASSERT_TLM_RxCrcErrors(0, 1);
+
+    // The link still works afterward: a clean frame is delivered normally.
+    this->clearHistory();
+    U8 good[32];
+    for (FwSizeType i = 0; i < sizeof good; i++) {
+        good[i] = static_cast<U8>(i + 1);
+    }
+    this->m_model.injectAirData(good, sizeof good);
+    for (U32 tick = 0; tick < 1024; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() > 0) {
+            break;
+        }
+    }
+    ASSERT_from_dataOut_SIZE(1);
+    ASSERT_EQ(this->fromPortHistory_dataOut->at(0).data.getSize(), sizeof good);
+}
+
+void Rfm9XManagerTester ::test_data_return() {
+    U8 data[8] = {0};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataReturnIn(0, buffer, context);
+    ASSERT_from_deallocate_SIZE(1);
+}
+
+void Rfm9XManagerTester ::test_transmit_disabled() {
+    this->makeReady();
+    this->sendCmd_TRANSMIT(0, 0, Rfm9X::TransmitState::DISABLED);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_TRANSMIT, 0, Fw::CmdResponse::OK);
+    this->clearHistory();
+
+    // Mute: no SPI TX; FAILURE pauses ComQueue; buffer returned.
+    U8 data[32];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>(i);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    ASSERT_from_spiWriteRead_SIZE(0);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+
+    // Re-enable emits SUCCESS to resume Com, then the next frame transmits
+    this->clearHistory();
+    this->sendCmd_TRANSMIT(0, 1, Rfm9X::TransmitState::ENABLED);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    this->clearHistory();
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    ASSERT_TLM_PacketsTransmitted(0, 1);
+}
+
+void Rfm9XManagerTester ::test_transmit_enable_idempotent() {
+    this->makeReady();
+    // No frame was deferred while disabled: re-enabling must not emit an
+    // unsolicited SUCCESS (ComQueue asserts on a resume while READY).
+    this->sendCmd_TRANSMIT(0, 0, Rfm9X::TransmitState::DISABLED);
+    this->sendCmd_TRANSMIT(0, 1, Rfm9X::TransmitState::ENABLED);
+    ASSERT_CMD_RESPONSE_SIZE(2);
+    ASSERT_from_comStatusOut_SIZE(0);
+
+    // Enabling while already enabled is also silent.
+    this->sendCmd_TRANSMIT(0, 2, Rfm9X::TransmitState::ENABLED);
+    ASSERT_from_comStatusOut_SIZE(0);
+}
+
+void Rfm9XManagerTester ::test_reset_during_transmit() {
+    this->makeReady();
+    // Stall PacketSent so the staged TX stays active across ticks.
+    this->m_model.setPacketSentStall(true);
+    U8 data[32];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>(i);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runTicks(8);
+    ASSERT_from_dataReturnOut_SIZE(0);
+
+    // RESET while TX is active: the buffer is returned with FAILURE and no
+    // further TX SPI traffic follows once the reset sequence begins.
+    this->sendCmd_RESET(0, 0);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_RESET, 0, Fw::CmdResponse::OK);
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::FAILURE));
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+
+    // The radio recovers to READY and can transmit again.
+    this->m_model.setPacketSentStall(false);
+    this->clearHistory();
+    this->runUntilReady();
+    ASSERT_EVENTS_RadioReady_SIZE(1);
+    this->clearHistory();
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    ASSERT_EQ(this->m_model.retrievePacket(transmitted, sizeof transmitted), sizeof data);
+}
+
+void Rfm9XManagerTester ::test_stale_sync_recovery() {
+    this->makeReady();
+    // A carrier asserts SyncAddressMatch with no FIFO progress: after the
+    // bounded stale window the manager must command an RX restart.
+    this->m_model.setChannelBusy(true);
+    this->m_model.clearRegisterWriteHistory();
+    this->runTicks(3 * Rfm9XManager::RX_STALE_SYNC_TICKS);
+    ASSERT_TRUE(this->m_model.wasRegisterWritten(
+        Reg::PACKET_CONFIG_2,
+        static_cast<U8>(PacketConfig2::AUTO_RX_RESTART_ON | PacketConfig2::RX_RESTART)));
+
+    // The link still works after recovery.
+    this->m_model.setChannelBusy(false);
+    this->clearHistory();
+    U8 good[24];
+    for (FwSizeType i = 0; i < sizeof good; i++) {
+        good[i] = static_cast<U8>(i + 1);
+    }
+    this->m_model.injectAirData(good, sizeof good);
+    for (U32 tick = 0; tick < 1024; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() > 0) {
+            break;
+        }
+    }
+    ASSERT_from_dataOut_SIZE(1);
+}
+
+void Rfm9XManagerTester ::test_local_hold_ordering() {
+    // Constructed with comStatusOut unconnected: local pending-TX hold mode.
+    ASSERT_FALSE(this->component.isConnected_comStatusOut_OutputPort(0));
+    this->setDefaultParameters();
+    this->component.loadParameters();
+    this->runUntilReady();
+    ASSERT_EVENTS_RadioReady_SIZE(1);
+    this->clearHistory();
+
+    // While muted, frames are held locally (not dropped, no status).
+    this->sendCmd_TRANSMIT(0, 0, Rfm9X::TransmitState::DISABLED);
+    U8 first[16];
+    U8 second[16];
+    for (FwSizeType i = 0; i < sizeof first; i++) {
+        first[i] = static_cast<U8>(0x10 + i);
+        second[i] = static_cast<U8>(0x80 + i);
+    }
+    Fw::Buffer firstBuffer(first, sizeof first);
+    Fw::Buffer secondBuffer(second, sizeof second);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, firstBuffer, context);
+    this->invoke_to_dataIn(0, secondBuffer, context);
+    ASSERT_from_dataReturnOut_SIZE(0);
+
+    // Re-enable: held frames drain oldest-first, paced by the TX holdoff.
+    this->sendCmd_TRANSMIT(0, 1, Rfm9X::TransmitState::ENABLED);
+    for (U32 tick = 0; tick < (4 * Rfm9XManager::TX_TX_HOLDOFF_TICKS); tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataReturnOut->size() >= 2) {
+            break;
+        }
+    }
+    ASSERT_from_dataReturnOut_SIZE(2);
+    ASSERT_TLM_PacketsTransmitted(1, 2);
+
+    U8 transmitted[MAX_PACKET_PAYLOAD];
+    FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, sizeof first);
+    for (FwSizeType i = 0; i < size; i++) {
+        ASSERT_EQ(transmitted[i], first[i]);
+    }
+    size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, sizeof second);
+    for (FwSizeType i = 0; i < size; i++) {
+        ASSERT_EQ(transmitted[i], second[i]);
+    }
+}
+
+}  // namespace Rfm9X
