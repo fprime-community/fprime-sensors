@@ -37,7 +37,7 @@ module Rfm9X {
     }
 
     @ Nominal RFM9X transmitter output power in dBm, on the PA_BOOST pin
-    @ (the Adafruit RFM9X breakout's antenna path per RFM9XDatasheet.md).
+    @ (the Adafruit RFM9X breakout's antenna path per RFM9XDatasheet).
     @ PA_BOOST's floor is +2 dBm (datasheet RegPaConfig), so DBM_0 is omitted.
     @ The helper controls RegPaConfig, RegOcp, and RegPaDac (+20 dBm) together.
     enum Rfm9XTxPower : I8 {
