@@ -1,7 +1,7 @@
 // ======================================================================
 // \title  Rfm9XSimModelTestMain.cpp
 // \brief  Register-level tests proving Rfm9XSimModel behaves like the
-//         RFM9XHCW visible over SPI (datasheet HopeRF V1.1).
+//         RFM9X (SX1276/8) LoRa radio visible over SPI (datasheet).
 //
 // The manager unit tests use this model as their radio; these tests
 // validate the model itself so manager results are trustworthy.
@@ -30,12 +30,33 @@ class Rfm9XSimModelTest : public ::testing::Test {
         this->model.spiTransaction(mosi, miso, sizeof mosi);
     }
 
-    //! Enter a mode and clock past any modeled settling time
+    //! Enter a mode field value, preserving LongRangeMode, and clock past
+    //! any modeled settling time
     void enterMode(U8 mode, FwSizeType settleClocks = 0) {
-        this->writeReg(Reg::OP_MODE, mode);
+        this->writeReg(Reg::OP_MODE, static_cast<U8>(Mode::LONG_RANGE_MODE | mode));
         for (FwSizeType i = 0; i < settleClocks; i++) {
-            (void)this->readReg(Reg::IRQ_FLAGS_1);
+            (void)this->readReg(Reg::IRQ_FLAGS);
         }
+    }
+
+    //! Stage a payload at FifoTxBaseAddr and set PayloadLength, as the
+    //! manager's TX_SET_FIFO_PTR/TX_WRITE_PAYLOAD states do
+    void stageTxPayload(const U8* data, FwSizeType size) {
+        this->writeReg(Reg::FIFO_TX_BASE_ADDR, 0x00);
+        this->writeReg(Reg::PAYLOAD_LENGTH, static_cast<U8>(size));
+        this->writeReg(Reg::FIFO_ADDR_PTR, 0x00);
+        for (FwSizeType i = 0; i < size; i++) {
+            this->writeReg(Reg::FIFO, data[i]);
+        }
+    }
+
+    //! Poll IRQ_FLAGS until the given bit sets or the bound is reached
+    U8 pollIrqUntil(U8 bit, FwSizeType bound) {
+        U8 flags = 0;
+        for (FwSizeType i = 0; (i < bound) && ((flags & bit) == 0); i++) {
+            flags = this->readReg(Reg::IRQ_FLAGS);
+        }
+        return flags;
     }
 
     Rfm9XSimModel model;
@@ -46,29 +67,30 @@ class Rfm9XSimModelTest : public ::testing::Test {
 // ----------------------------------------------------------------------
 
 TEST_F(Rfm9XSimModelTest, ResetRegisterDefaults) {
-    // Datasheet Table 23 power-on values the manager relies on
+    // datasheet section 6.1/6.4 power-on values the manager relies on
     EXPECT_EQ(this->readReg(Reg::VERSION), VERSION_VALUE);
+    EXPECT_EQ(this->readReg(Reg::OP_MODE) & Mode::LONG_RANGE_MODE, Mode::LONG_RANGE_MODE);
     EXPECT_EQ(this->readReg(Reg::OP_MODE) & Mode::MASK, Mode::STANDBY);
-    EXPECT_EQ(this->readReg(Reg::BITRATE_MSB), 0x1A);
-    EXPECT_EQ(this->readReg(Reg::BITRATE_LSB), 0x0B);
-    EXPECT_EQ(this->readReg(Reg::PA_LEVEL), 0x9F);
-    EXPECT_EQ(this->readReg(Reg::RSSI_VALUE), static_cast<U8>(Rfm9XSimModel::RSSI_READBACK));
+    EXPECT_EQ(this->model.readRegisterValue(Reg::FRF_MSB), 0x6C);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::FRF_MID), 0x80);
+    EXPECT_EQ(this->readReg(Reg::PKT_RSSI_VALUE), static_cast<U8>(Rfm9XSimModel::RSSI_READBACK));
+    EXPECT_EQ(this->readReg(Reg::PKT_SNR_VALUE), static_cast<U8>(Rfm9XSimModel::SNR_READBACK));
 }
 
 TEST_F(Rfm9XSimModelTest, SingleWriteReadBack) {
-    this->writeReg(Reg::SYNC_VALUE_1, 0xAB);
-    EXPECT_EQ(this->readReg(Reg::SYNC_VALUE_1), 0xAB);
-    EXPECT_EQ(this->model.readRegisterValue(Reg::SYNC_VALUE_1), 0xAB);
+    this->writeReg(Reg::MODEM_CONFIG_1, 0x72);
+    EXPECT_EQ(this->readReg(Reg::MODEM_CONFIG_1), 0x72);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::MODEM_CONFIG_1), 0x72);
 }
 
 TEST_F(Rfm9XSimModelTest, BurstWriteAutoIncrements) {
-    // Burst access auto-increments the address (datasheet section 5.2.1)
-    U8 mosi[4] = {static_cast<U8>(Reg::BITRATE_MSB | SPI_WRITE_FLAG), 0x0D, 0x05, 0x33};
+    // Burst access auto-increments the 7-bit SPI address (datasheet section 4.3)
+    U8 mosi[4] = {static_cast<U8>(Reg::FRF_MSB | SPI_WRITE_FLAG), 0x6C, 0x80, 0x12};
     U8 miso[4] = {0};
     this->model.spiTransaction(mosi, miso, sizeof mosi);
-    EXPECT_EQ(this->model.readRegisterValue(Reg::BITRATE_MSB), 0x0D);
-    EXPECT_EQ(this->model.readRegisterValue(Reg::BITRATE_LSB), 0x05);
-    EXPECT_EQ(this->model.readRegisterValue(Reg::FDEV_MSB), 0x33);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::FRF_MSB), 0x6C);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::FRF_MID), 0x80);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::FRF_LSB), 0x12);
 }
 
 TEST_F(Rfm9XSimModelTest, BurstReadAutoIncrements) {
@@ -85,156 +107,117 @@ TEST_F(Rfm9XSimModelTest, BurstReadAutoIncrements) {
 
 TEST_F(Rfm9XSimModelTest, RegisterWriteHistory) {
     this->model.clearRegisterWriteHistory();
-    this->writeReg(Reg::TEST_PA_1, 0x5D);
-    EXPECT_TRUE(this->model.wasRegisterWritten(Reg::TEST_PA_1, 0x5D));
-    EXPECT_FALSE(this->model.wasRegisterWritten(Reg::TEST_PA_1, 0x55));
+    this->writeReg(Reg::PA_CONFIG, 0xCF);
+    EXPECT_TRUE(this->model.wasRegisterWritten(Reg::PA_CONFIG, 0xCF));
+    EXPECT_FALSE(this->model.wasRegisterWritten(Reg::PA_CONFIG, 0x00));
     this->model.clearRegisterWriteHistory();
-    EXPECT_FALSE(this->model.wasRegisterWritten(Reg::TEST_PA_1, 0x5D));
+    EXPECT_FALSE(this->model.wasRegisterWritten(Reg::PA_CONFIG, 0xCF));
+}
+
+TEST_F(Rfm9XSimModelTest, RegisterWriteHistoryBounded) {
+    this->model.clearRegisterWriteHistory();
+    // Overflow the bounded history; the earliest writes are retained
+    for (FwSizeType i = 0; i < (Rfm9XSimModel::REGISTER_WRITE_HISTORY_SIZE + 8); i++) {
+        this->writeReg(Reg::PA_CONFIG, static_cast<U8>(i));
+    }
+    EXPECT_TRUE(this->model.wasRegisterWritten(Reg::PA_CONFIG, 0));
+    EXPECT_FALSE(
+        this->model.wasRegisterWritten(Reg::PA_CONFIG, static_cast<U8>(Rfm9XSimModel::REGISTER_WRITE_HISTORY_SIZE + 4)));
 }
 
 // ----------------------------------------------------------------------
-// FIFO semantics
+// Dual-pointer FIFO semantics (datasheet section 4.1.2)
 // ----------------------------------------------------------------------
 
-TEST_F(Rfm9XSimModelTest, FifoPushPopOrder) {
-    // FIFO access does not auto-increment: repeated writes queue in order
+TEST_F(Rfm9XSimModelTest, FifoAddrPtrAutoIncrementsAndWraps) {
+    this->writeReg(Reg::FIFO_ADDR_PTR, 0x00);
     this->writeReg(Reg::FIFO, 0x11);
     this->writeReg(Reg::FIFO, 0x22);
     this->writeReg(Reg::FIFO, 0x33);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_NOT_EMPTY, 0);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::FIFO_ADDR_PTR), 0x03);
+    this->writeReg(Reg::FIFO_ADDR_PTR, 0x00);
     EXPECT_EQ(this->readReg(Reg::FIFO), 0x11);
     EXPECT_EQ(this->readReg(Reg::FIFO), 0x22);
     EXPECT_EQ(this->readReg(Reg::FIFO), 0x33);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_NOT_EMPTY, 0);
 }
 
-TEST_F(Rfm9XSimModelTest, FifoLevelTracksThreshold) {
-    this->writeReg(Reg::FIFO_THRESH, FIFO_THRESHOLD);
-    for (FwSizeType i = 0; i < FIFO_THRESHOLD; i++) {
-        this->writeReg(Reg::FIFO, static_cast<U8>(i));
-    }
-    // Count == threshold: FifoLevel still clear (asserts when count > threshold)
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_LEVEL, 0);
-    this->writeReg(Reg::FIFO, 0xEE);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_LEVEL, 0);
-}
-
-TEST_F(Rfm9XSimModelTest, FifoFullAndOverrun) {
-    for (FwSizeType i = 0; i < FIFO_SIZE; i++) {
-        this->writeReg(Reg::FIFO, static_cast<U8>(i));
-    }
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_FULL, 0);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_OVERRUN, 0);
-    // One more byte is lost and latches FifoOverrun (datasheet section 5.2.2.3)
-    this->writeReg(Reg::FIFO, 0xFF);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_OVERRUN, 0);
-    // Writing FifoOverrun=1 clears the flag and flushes the FIFO
-    this->writeReg(Reg::IRQ_FLAGS_2, IrqFlags2::FIFO_OVERRUN);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_OVERRUN, 0);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_NOT_EMPTY, 0);
+TEST_F(Rfm9XSimModelTest, FifoAccessDoesNotIncrementOuterSpiAddress) {
+    // Multi-byte FIFO access advances FifoAddrPtr, not the outer SPI address
+    // (datasheet section 4.1.2 vs. burst-access auto-increment, section 4.3).
+    this->writeReg(Reg::FIFO_ADDR_PTR, 0x05);
+    U8 mosi[4] = {static_cast<U8>(Reg::FIFO | SPI_WRITE_FLAG), 0xAA, 0xBB, 0xCC};
+    U8 miso[4] = {0};
+    this->model.spiTransaction(mosi, miso, sizeof mosi);
+    this->writeReg(Reg::FIFO_ADDR_PTR, 0x05);
+    EXPECT_EQ(this->readReg(Reg::FIFO), 0xAA);
+    EXPECT_EQ(this->readReg(Reg::FIFO), 0xBB);
+    EXPECT_EQ(this->readReg(Reg::FIFO), 0xCC);
 }
 
 // ----------------------------------------------------------------------
 // Mode transitions and settling
 // ----------------------------------------------------------------------
 
-TEST_F(Rfm9XSimModelTest, ModeReadyImmediateByDefault) {
-    this->enterMode(Mode::RX);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::MODE_READY, 0);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::RX_READY, 0);
-    this->enterMode(Mode::TX);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::TX_READY, 0);
+TEST_F(Rfm9XSimModelTest, ModeFieldReadbackPreservesLongRangeMode) {
+    this->enterMode(Mode::RX_CONTINUOUS);
+    EXPECT_EQ(this->readReg(Reg::OP_MODE) & Mode::MASK, Mode::RX_CONTINUOUS);
+    EXPECT_NE(this->readReg(Reg::OP_MODE) & Mode::LONG_RANGE_MODE, 0);
+    this->enterMode(Mode::STANDBY);
+    EXPECT_EQ(this->readReg(Reg::OP_MODE) & Mode::MASK, Mode::STANDBY);
+    EXPECT_NE(this->readReg(Reg::OP_MODE) & Mode::LONG_RANGE_MODE, 0);
 }
 
-TEST_F(Rfm9XSimModelTest, ModeSettleDelaysModeReady) {
-    // Oscillator/PLL settling deasserts ModeReady after each mode change
-    this->model.setModeSettleByteTimes(8);
-    this->writeReg(Reg::OP_MODE, Mode::RX);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::MODE_READY, 0);
-    // Each IRQ read exchanges 2 SPI bytes = 2 byte clocks
+TEST_F(Rfm9XSimModelTest, ModeSettleDelaysPacketEngineActivity) {
+    // Oscillator/PLL settling withholds packet-engine byte-clock activity
+    this->model.setModeSettleByteTimes(16);
+    this->enterMode(Mode::RX_CONTINUOUS);
+    const U8 uplink[4] = {0x01, 0x02, 0x03, 0x04};
+    this->model.injectAirData(uplink, sizeof uplink);
+    // A few reads fall entirely within the settle window
     for (FwSizeType i = 0; i < 4; i++) {
-        (void)this->readReg(Reg::IRQ_FLAGS_1);
+        EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS) & IrqFlags::RX_DONE, 0);
     }
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::MODE_READY, 0);
-}
-
-TEST_F(Rfm9XSimModelTest, EnteringRxClearsFifoAndPacketSent) {
-    this->writeReg(Reg::FIFO, 0x77);
-    this->enterMode(Mode::RX);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_NOT_EMPTY, 0);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::PACKET_SENT, 0);
+    const U8 flags = this->pollIrqUntil(IrqFlags::RX_DONE, 64);
+    EXPECT_NE(flags & IrqFlags::RX_DONE, 0);
 }
 
 // ----------------------------------------------------------------------
-// Transmit path
+// Transmit path (datasheet section 4.1.5, Data Transmission Sequence)
 // ----------------------------------------------------------------------
 
-TEST_F(Rfm9XSimModelTest, TransmitVariableLengthPacket) {
-    // Variable-length packet: length byte then payload (datasheet section 5.2.2.2)
+TEST_F(Rfm9XSimModelTest, TransmitQueuesPacketOnTxDone) {
     const U8 payload[5] = {0xDE, 0xAD, 0xBE, 0xEF, 0x42};
-    this->writeReg(Reg::FIFO, sizeof payload);
-    for (FwSizeType i = 0; i < sizeof payload; i++) {
-        this->writeReg(Reg::FIFO, payload[i]);
-    }
+    this->stageTxPayload(payload, sizeof payload);
     this->enterMode(Mode::TX);
-    // Clock the packet onto the air: poll IRQ until PacketSent
-    U8 flags2 = 0;
-    for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PACKET_SENT) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    EXPECT_NE(flags2 & IrqFlags2::PACKET_SENT, 0);
+    const U8 flags = this->pollIrqUntil(IrqFlags::TX_DONE, 64);
+    EXPECT_NE(flags & IrqFlags::TX_DONE, 0);
     U8 out[MAX_PACKET_PAYLOAD] = {0};
     const FwSizeType size = this->model.retrievePacket(out, sizeof out);
     ASSERT_EQ(size, sizeof payload);
     EXPECT_EQ(::memcmp(out, payload, size), 0);
 }
 
-TEST_F(Rfm9XSimModelTest, TransmitStreamsLargerThanFifo) {
-    // A 200-byte packet cannot fit the 66-byte FIFO: stream by FifoLevel
-    U8 payload[200];
-    for (FwSizeType i = 0; i < sizeof payload; i++) {
-        payload[i] = static_cast<U8>(i * 7);
-    }
-    this->writeReg(Reg::FIFO, sizeof payload);
-    FwSizeType written = 0;
-    // Initial fill leaving room for the length byte already pushed
-    while (written < (FIFO_SIZE - 1)) {
-        this->writeReg(Reg::FIFO, payload[written]);
-        written++;
-    }
+TEST_F(Rfm9XSimModelTest, ModeReturnsToStandbyAfterTxDone) {
+    // datasheet section 4.1.5: "Upon completion the TxDone interrupt is
+    // issued and the radio returns to Stand-by mode."
+    const U8 payload[2] = {0xAA, 0xBB};
+    this->stageTxPayload(payload, sizeof payload);
     this->enterMode(Mode::TX);
-    // Top up whenever FifoLevel clears, as the manager does (bounded loop)
-    for (FwSizeType guard = 0; (guard < 4096) && (written < sizeof payload); guard++) {
-        const U8 flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-        if ((flags2 & IrqFlags2::FIFO_LEVEL) == 0) {
-            this->writeReg(Reg::FIFO, payload[written]);
-            written++;
-        }
-    }
-    ASSERT_EQ(written, sizeof payload);
-    U8 flags2 = 0;
-    for (FwSizeType i = 0; (i < 512) && ((flags2 & IrqFlags2::PACKET_SENT) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    EXPECT_NE(flags2 & IrqFlags2::PACKET_SENT, 0);
-    U8 out[MAX_PACKET_PAYLOAD] = {0};
-    const FwSizeType size = this->model.retrievePacket(out, sizeof out);
-    ASSERT_EQ(size, sizeof payload);
-    EXPECT_EQ(::memcmp(out, payload, size), 0);
+    ASSERT_NE(this->pollIrqUntil(IrqFlags::TX_DONE, 64) & IrqFlags::TX_DONE, 0);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::OP_MODE) & Mode::MASK, Mode::STANDBY);
 }
 
-TEST_F(Rfm9XSimModelTest, PacketSentStall) {
-    this->model.setPacketSentStall(true);
-    this->writeReg(Reg::FIFO, 2);
-    this->writeReg(Reg::FIFO, 0xAA);
-    this->writeReg(Reg::FIFO, 0xBB);
+TEST_F(Rfm9XSimModelTest, TxDoneStall) {
+    this->model.setTxDoneStall(true);
+    const U8 payload[2] = {0xAA, 0xBB};
+    this->stageTxPayload(payload, sizeof payload);
     this->enterMode(Mode::TX);
-    U8 flags2 = 0;
+    U8 flags = 0;
     for (FwSizeType i = 0; i < 64; i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
+        flags = this->readReg(Reg::IRQ_FLAGS);
     }
-    // PacketSent never asserts and no packet is queued
-    EXPECT_EQ(flags2 & IrqFlags2::PACKET_SENT, 0);
+    // TxDone never asserts and no packet is queued
+    EXPECT_EQ(flags & IrqFlags::TX_DONE, 0);
     U8 out[MAX_PACKET_PAYLOAD];
     EXPECT_EQ(this->model.retrievePacket(out, sizeof out), 0u);
 }
@@ -242,15 +225,12 @@ TEST_F(Rfm9XSimModelTest, PacketSentStall) {
 TEST_F(Rfm9XSimModelTest, MultipleQueuedTransmits) {
     for (U8 packet = 0; packet < 3; packet++) {
         this->enterMode(Mode::STANDBY);
-        this->writeReg(Reg::IRQ_FLAGS_2, IrqFlags2::FIFO_OVERRUN);  // FIFO flush
-        this->writeReg(Reg::FIFO, 1);
-        this->writeReg(Reg::FIFO, static_cast<U8>(0xC0 + packet));
+        const U8 payload[1] = {static_cast<U8>(0xC0 + packet)};
+        this->stageTxPayload(payload, sizeof payload);
         this->enterMode(Mode::TX);
-        U8 flags2 = 0;
-        for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PACKET_SENT) == 0); i++) {
-            flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-        }
-        ASSERT_NE(flags2 & IrqFlags2::PACKET_SENT, 0);
+        ASSERT_NE(this->pollIrqUntil(IrqFlags::TX_DONE, 64) & IrqFlags::TX_DONE, 0);
+        // Acknowledge TxDone so the next loop iteration's wait is meaningful
+        this->writeReg(Reg::IRQ_FLAGS, IrqFlags::TX_DONE);
     }
     U8 out[MAX_PACKET_PAYLOAD];
     for (U8 packet = 0; packet < 3; packet++) {
@@ -260,165 +240,15 @@ TEST_F(Rfm9XSimModelTest, MultipleQueuedTransmits) {
     EXPECT_EQ(this->model.retrievePacket(out, sizeof out), 0u);
 }
 
-// ----------------------------------------------------------------------
-// Receive path
-// ----------------------------------------------------------------------
-
-TEST_F(Rfm9XSimModelTest, ReceiveSmallPacket) {
-    this->enterMode(Mode::RX);
-    const U8 uplink[4] = {0x01, 0x02, 0x03, 0x04};
-    this->model.injectAirData(uplink, sizeof uplink);
-    // Clock delivery into the FIFO until PayloadReady
-    U8 flags2 = 0;
-    for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PAYLOAD_READY) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    ASSERT_NE(flags2 & IrqFlags2::PAYLOAD_READY, 0);
-    // First FIFO byte is the length in variable-length mode
-    EXPECT_EQ(this->readReg(Reg::FIFO), sizeof uplink);
-    for (FwSizeType i = 0; i < sizeof uplink; i++) {
-        EXPECT_EQ(this->readReg(Reg::FIFO), uplink[i]);
-    }
-    // Draining the FIFO ends the reception (Rssi/SyncAddressMatch clear)
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::SYNC_ADDRESS_MATCH, 0);
-}
-
-TEST_F(Rfm9XSimModelTest, ReceiveActiveAssertsRssiAndSync) {
-    this->enterMode(Mode::RX);
-    const U8 uplink[100] = {0x55};
-    this->model.injectAirData(uplink, sizeof uplink);
-    (void)this->readReg(Reg::IRQ_FLAGS_2);  // clock a few bytes in
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::SYNC_ADDRESS_MATCH, 0);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::RSSI, 0);
-}
-
-TEST_F(Rfm9XSimModelTest, ChannelBusyControl) {
-    this->enterMode(Mode::RX);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::SYNC_ADDRESS_MATCH, 0);
-    this->model.setChannelBusy(true);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::SYNC_ADDRESS_MATCH, 0);
-    EXPECT_NE(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::RSSI, 0);
-    this->model.setChannelBusy(false);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_1) & IrqFlags1::SYNC_ADDRESS_MATCH, 0);
-}
-
-TEST_F(Rfm9XSimModelTest, CorruptFrameNeverAssertsPayloadReady) {
-    this->enterMode(Mode::RX);
-    this->model.injectCorruptFrame(24);
-    U8 flags2 = 0;
-    FwSizeType drained = 0;
-    for (FwSizeType i = 0; i < 256; i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-        ASSERT_EQ(flags2 & IrqFlags2::PAYLOAD_READY, 0);
-        if ((flags2 & IrqFlags2::FIFO_NOT_EMPTY) != 0) {
-            (void)this->readReg(Reg::FIFO);
-            drained++;
-        }
-    }
-    EXPECT_GT(drained, 24u);
-}
-
-TEST_F(Rfm9XSimModelTest, RxRestartFlushesAndAllowsNextPacket) {
-    this->enterMode(Mode::RX);
-    const U8 first[8] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
-    this->model.injectAirData(first, sizeof first);
-    U8 flags2 = 0;
-    for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PAYLOAD_READY) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    ASSERT_NE(flags2 & IrqFlags2::PAYLOAD_READY, 0);
-    // Abandon it: RxRestart command bit flushes and self-clears
-    const U8 packetConfig2 = this->model.readRegisterValue(Reg::PACKET_CONFIG_2);
-    this->writeReg(Reg::PACKET_CONFIG_2, packetConfig2 | 0x04);
-    EXPECT_EQ(this->model.readRegisterValue(Reg::PACKET_CONFIG_2) & 0x04, 0);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::PAYLOAD_READY, 0);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_NOT_EMPTY, 0);
-    // A following packet is received normally
-    const U8 second[3] = {0xA1, 0xA2, 0xA3};
-    this->model.injectAirData(second, sizeof second);
-    flags2 = 0;
-    for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PAYLOAD_READY) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    ASSERT_NE(flags2 & IrqFlags2::PAYLOAD_READY, 0);
-    EXPECT_EQ(this->readReg(Reg::FIFO), sizeof second);
-}
-
-TEST_F(Rfm9XSimModelTest, ReceiveMultipleQueuedPackets) {
-    this->enterMode(Mode::RX);
-    // 20 bytes queue as a 20-byte frame; a later injection queues separately
-    U8 first[20];
-    for (FwSizeType i = 0; i < sizeof first; i++) {
-        first[i] = static_cast<U8>(i + 1);
-    }
-    this->model.injectAirData(first, sizeof first);
-    U8 flags2 = 0;
-    for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PAYLOAD_READY) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    ASSERT_NE(flags2 & IrqFlags2::PAYLOAD_READY, 0);
-    const U8 second[5] = {0xB1, 0xB2, 0xB3, 0xB4, 0xB5};
-    this->model.injectAirData(second, sizeof second);
-    // Drain the first frame completely
-    ASSERT_EQ(this->readReg(Reg::FIFO), sizeof first);
-    for (FwSizeType i = 0; i < sizeof first; i++) {
-        EXPECT_EQ(this->readReg(Reg::FIFO), first[i]);
-    }
-    // PayloadReady clears once the FIFO empties; the next frame follows
-    // after the modeled preamble/sync gap
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::PAYLOAD_READY, 0);
-    flags2 = 0;
-    for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PAYLOAD_READY) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    ASSERT_NE(flags2 & IrqFlags2::PAYLOAD_READY, 0);
-    ASSERT_EQ(this->readReg(Reg::FIFO), sizeof second);
-    for (FwSizeType i = 0; i < sizeof second; i++) {
-        EXPECT_EQ(this->readReg(Reg::FIFO), second[i]);
-    }
-}
-
-TEST_F(Rfm9XSimModelTest, ReceiveOverrunRecoversViaRxRestart) {
-    this->enterMode(Mode::RX);
-    // A frame larger than the FIFO overruns when the host never drains
-    U8 uplink[120];
-    for (FwSizeType i = 0; i < sizeof uplink; i++) {
-        uplink[i] = static_cast<U8>(i);
-    }
-    this->model.injectAirData(uplink, sizeof uplink);
-    U8 flags2 = 0;
-    for (FwSizeType i = 0; (i < 256) && ((flags2 & IrqFlags2::FIFO_OVERRUN) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    ASSERT_NE(flags2 & IrqFlags2::FIFO_OVERRUN, 0);
-    // RxRestart flushes the wreckage and re-arms the receiver
-    const U8 packetConfig2 = this->model.readRegisterValue(Reg::PACKET_CONFIG_2);
-    this->writeReg(Reg::PACKET_CONFIG_2, packetConfig2 | 0x04);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_OVERRUN, 0);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_NOT_EMPTY, 0);
-    const U8 next[3] = {0xD1, 0xD2, 0xD3};
-    this->model.injectAirData(next, sizeof next);
-    flags2 = 0;
-    for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PAYLOAD_READY) == 0); i++) {
-        flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-    }
-    ASSERT_NE(flags2 & IrqFlags2::PAYLOAD_READY, 0);
-    EXPECT_EQ(this->readReg(Reg::FIFO), sizeof next);
-}
-
 TEST_F(Rfm9XSimModelTest, TransmitQueueOverflowDropsExcess) {
     // Fill the retrieval queue past its depth: extra packets are dropped
     for (FwSizeType packet = 0; packet < (Rfm9XSimModel::TX_QUEUE_DEPTH + 2); packet++) {
         this->enterMode(Mode::STANDBY);
-        this->writeReg(Reg::IRQ_FLAGS_2, IrqFlags2::FIFO_OVERRUN);  // FIFO flush
-        this->writeReg(Reg::FIFO, 1);
-        this->writeReg(Reg::FIFO, static_cast<U8>(packet));
+        const U8 payload[1] = {static_cast<U8>(packet)};
+        this->stageTxPayload(payload, sizeof payload);
         this->enterMode(Mode::TX);
-        U8 flags2 = 0;
-        for (FwSizeType i = 0; (i < 64) && ((flags2 & IrqFlags2::PACKET_SENT) == 0); i++) {
-            flags2 = this->readReg(Reg::IRQ_FLAGS_2);
-        }
-        ASSERT_NE(flags2 & IrqFlags2::PACKET_SENT, 0);
+        ASSERT_NE(this->pollIrqUntil(IrqFlags::TX_DONE, 64) & IrqFlags::TX_DONE, 0);
+        this->writeReg(Reg::IRQ_FLAGS, IrqFlags::TX_DONE);
     }
     U8 out[MAX_PACKET_PAYLOAD];
     for (FwSizeType packet = 0; packet < Rfm9XSimModel::TX_QUEUE_DEPTH; packet++) {
@@ -428,15 +258,92 @@ TEST_F(Rfm9XSimModelTest, TransmitQueueOverflowDropsExcess) {
     EXPECT_EQ(this->model.retrievePacket(out, sizeof out), 0u);
 }
 
-TEST_F(Rfm9XSimModelTest, RegisterWriteHistoryBounded) {
-    this->model.clearRegisterWriteHistory();
-    // Overflow the bounded history; the earliest writes are retained
-    for (FwSizeType i = 0; i < (Rfm9XSimModel::REGISTER_WRITE_HISTORY_SIZE + 8); i++) {
-        this->writeReg(Reg::SYNC_VALUE_1, static_cast<U8>(i));
+// ----------------------------------------------------------------------
+// Receive path (datasheet section 4.1.5, Data Reception Sequence)
+// ----------------------------------------------------------------------
+
+TEST_F(Rfm9XSimModelTest, ReceiveSmallPacket) {
+    this->enterMode(Mode::RX_CONTINUOUS);
+    const U8 uplink[4] = {0x01, 0x02, 0x03, 0x04};
+    this->model.injectAirData(uplink, sizeof uplink);
+    const U8 flags = this->pollIrqUntil(IrqFlags::RX_DONE, 64);
+    ASSERT_NE(flags & IrqFlags::RX_DONE, 0);
+    EXPECT_EQ(flags & IrqFlags::PAYLOAD_CRC_ERROR, 0);
+    EXPECT_EQ(this->readReg(Reg::RX_NB_BYTES), sizeof uplink);
+    const U8 currentAddr = this->readReg(Reg::FIFO_RX_CURRENT_ADDR);
+    this->writeReg(Reg::FIFO_ADDR_PTR, currentAddr);
+    for (FwSizeType i = 0; i < sizeof uplink; i++) {
+        EXPECT_EQ(this->readReg(Reg::FIFO), uplink[i]);
     }
-    EXPECT_TRUE(this->model.wasRegisterWritten(Reg::SYNC_VALUE_1, 0));
-    EXPECT_FALSE(this->model.wasRegisterWritten(
-        Reg::SYNC_VALUE_1, static_cast<U8>(Rfm9XSimModel::REGISTER_WRITE_HISTORY_SIZE + 4)));
+}
+
+TEST_F(Rfm9XSimModelTest, ChannelBusyReflectedInModemStat) {
+    this->enterMode(Mode::RX_CONTINUOUS);
+    EXPECT_EQ(this->readReg(Reg::MODEM_STAT) & ModemStat::RX_ONGOING, 0);
+    this->model.setChannelBusy(true);
+    EXPECT_NE(this->readReg(Reg::MODEM_STAT) & ModemStat::RX_ONGOING, 0);
+    EXPECT_NE(this->readReg(Reg::MODEM_STAT) & ModemStat::SIGNAL_DETECTED, 0);
+    this->model.setChannelBusy(false);
+    EXPECT_EQ(this->readReg(Reg::MODEM_STAT) & ModemStat::RX_ONGOING, 0);
+}
+
+TEST_F(Rfm9XSimModelTest, ReceiveActiveReflectedInModemStat) {
+    this->enterMode(Mode::RX_CONTINUOUS);
+    U8 uplink[100] = {0x55};
+    this->model.injectAirData(uplink, sizeof uplink);
+    (void)this->readReg(Reg::IRQ_FLAGS);  // clock a few bytes in
+    EXPECT_NE(this->readReg(Reg::MODEM_STAT) & ModemStat::RX_ONGOING, 0);
+}
+
+TEST_F(Rfm9XSimModelTest, CorruptFrameAssertsRxDoneAndPayloadCrcError) {
+    // datasheet section 4.1.5: RxDone and PayloadCrcError are independent;
+    // the manager checks PayloadCrcError before trusting the payload.
+    this->enterMode(Mode::RX_CONTINUOUS);
+    this->model.injectCorruptFrame(24);
+    const U8 flags = this->pollIrqUntil(IrqFlags::RX_DONE, 128);
+    ASSERT_NE(flags & IrqFlags::RX_DONE, 0);
+    EXPECT_NE(flags & IrqFlags::PAYLOAD_CRC_ERROR, 0);
+}
+
+TEST_F(Rfm9XSimModelTest, AcknowledgingRxDoneAllowsNextReception) {
+    this->enterMode(Mode::RX_CONTINUOUS);
+    const U8 first[8] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
+    this->model.injectAirData(first, sizeof first);
+    U8 flags = this->pollIrqUntil(IrqFlags::RX_DONE, 64);
+    ASSERT_NE(flags & IrqFlags::RX_DONE, 0);
+    // Acknowledge (clear) RxDone, as the manager does after draining the FIFO
+    this->writeReg(Reg::IRQ_FLAGS, static_cast<U8>(IrqFlags::RX_DONE | IrqFlags::PAYLOAD_CRC_ERROR));
+    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS) & IrqFlags::RX_DONE, 0);
+    // A following packet is received normally
+    const U8 second[3] = {0xA1, 0xA2, 0xA3};
+    this->model.injectAirData(second, sizeof second);
+    flags = this->pollIrqUntil(IrqFlags::RX_DONE, 64);
+    ASSERT_NE(flags & IrqFlags::RX_DONE, 0);
+    EXPECT_EQ(this->readReg(Reg::RX_NB_BYTES), sizeof second);
+}
+
+TEST_F(Rfm9XSimModelTest, ReceiveMultipleQueuedPackets) {
+    this->enterMode(Mode::RX_CONTINUOUS);
+    U8 first[20];
+    for (FwSizeType i = 0; i < sizeof first; i++) {
+        first[i] = static_cast<U8>(i + 1);
+    }
+    this->model.injectAirData(first, sizeof first);
+    U8 flags = this->pollIrqUntil(IrqFlags::RX_DONE, 64);
+    ASSERT_NE(flags & IrqFlags::RX_DONE, 0);
+    EXPECT_EQ(this->readReg(Reg::RX_NB_BYTES), sizeof first);
+    const U8 second[5] = {0xB1, 0xB2, 0xB3, 0xB4, 0xB5};
+    this->model.injectAirData(second, sizeof second);
+    // A second reception cannot begin until RxDone is acknowledged
+    this->writeReg(Reg::IRQ_FLAGS, IrqFlags::RX_DONE);
+    flags = this->pollIrqUntil(IrqFlags::RX_DONE, 64);
+    ASSERT_NE(flags & IrqFlags::RX_DONE, 0);
+    EXPECT_EQ(this->readReg(Reg::RX_NB_BYTES), sizeof second);
+    const U8 currentAddr = this->readReg(Reg::FIFO_RX_CURRENT_ADDR);
+    this->writeReg(Reg::FIFO_ADDR_PTR, currentAddr);
+    for (FwSizeType i = 0; i < sizeof second; i++) {
+        EXPECT_EQ(this->readReg(Reg::FIFO), second[i]);
+    }
 }
 
 TEST_F(Rfm9XSimModelTest, InvalidSpiTransactionsIgnored) {
@@ -458,25 +365,30 @@ TEST_F(Rfm9XSimModelTest, InvalidSpiTransactionsIgnored) {
 TEST_F(Rfm9XSimModelTest, AbsentRadioReadsZero) {
     this->model.setRadioPresent(false);
     EXPECT_EQ(this->readReg(Reg::VERSION), 0);
-    this->writeReg(Reg::SYNC_VALUE_1, 0x77);  // latched nothing
+    this->writeReg(Reg::MODEM_CONFIG_1, 0x77);  // latched nothing
     this->model.setRadioPresent(true);
     EXPECT_EQ(this->readReg(Reg::VERSION), VERSION_VALUE);
-    EXPECT_EQ(this->readReg(Reg::SYNC_VALUE_1), 0);
+    // The reset-default value (datasheet section 6.4), not the 0x77 write
+    // attempted while the radio was absent.
+    EXPECT_EQ(this->readReg(Reg::MODEM_CONFIG_1), 0x72);
 }
 
 TEST_F(Rfm9XSimModelTest, RssiReadbackControl) {
-    this->model.setRssiReadback(0xB4);  // -90 dBm
-    EXPECT_EQ(this->readReg(Reg::RSSI_VALUE), 0xB4);
+    this->model.setRssiReadback(0x61);  // -137 + 0x61 (97) = -40 dBm
+    EXPECT_EQ(this->readReg(Reg::PKT_RSSI_VALUE), 0x61);
+}
+
+TEST_F(Rfm9XSimModelTest, SnrReadbackControl) {
+    this->model.setSnrReadback(0xF4);  // two's complement -12 / 4 = -3 dB
+    EXPECT_EQ(this->readReg(Reg::PKT_SNR_VALUE), 0xF4);
 }
 
 TEST_F(Rfm9XSimModelTest, ResetRestoresPowerOnState) {
-    this->writeReg(Reg::SYNC_VALUE_1, 0xAB);
-    this->writeReg(Reg::FIFO, 0x11);
-    this->enterMode(Mode::RX);
+    this->writeReg(Reg::MODEM_CONFIG_1, 0xAB);
+    this->enterMode(Mode::RX_CONTINUOUS);
     this->model.reset();
-    EXPECT_EQ(this->model.readRegisterValue(Reg::SYNC_VALUE_1), 0);
+    EXPECT_EQ(this->model.readRegisterValue(Reg::MODEM_CONFIG_1), 0x72);
     EXPECT_EQ(this->model.readRegisterValue(Reg::OP_MODE) & Mode::MASK, Mode::STANDBY);
-    EXPECT_EQ(this->readReg(Reg::IRQ_FLAGS_2) & IrqFlags2::FIFO_NOT_EMPTY, 0);
     EXPECT_EQ(this->readReg(Reg::VERSION), VERSION_VALUE);
 }
 
