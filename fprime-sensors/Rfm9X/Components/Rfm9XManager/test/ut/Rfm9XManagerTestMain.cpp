@@ -29,19 +29,9 @@ TEST(Nominal, TransmitLarge) {
     tester.test_transmit_large();
 }
 
-TEST(Nominal, TransmitFifoFit) {
-    Rfm9X::Rfm9XManagerTester tester;
-    tester.test_transmit_fifo_fit();
-}
-
 TEST(Nominal, ReceiveLarge) {
     Rfm9X::Rfm9XManagerTester tester;
     tester.test_receive_large();
-}
-
-TEST(Nominal, ReceiveFifoFit) {
-    Rfm9X::Rfm9XManagerTester tester;
-    tester.test_receive_fifo_fit();
 }
 
 TEST(Nominal, DefaultRegisterImage) {
@@ -49,14 +39,29 @@ TEST(Nominal, DefaultRegisterImage) {
     tester.test_default_register_image();
 }
 
-TEST(Nominal, HighPowerBoostRecovery) {
+TEST(Nominal, LongRangeModeSleepGated) {
     Rfm9X::Rfm9XManagerTester tester;
-    tester.test_high_power_boost_recovery();
+    tester.test_long_range_mode_sleep_gated();
 }
 
-TEST(Nominal, DataRateRegisterMap) {
+TEST(Nominal, FifoPointerManagement) {
     Rfm9X::Rfm9XManagerTester tester;
-    tester.test_data_rate_register_map();
+    tester.test_fifo_pointer_management();
+}
+
+TEST(Nominal, RssiSnrTelemetry) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_rssi_snr_telemetry();
+}
+
+TEST(Nominal, Dio0Mapping) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_dio0_mapping();
+}
+
+TEST(Nominal, SpreadingFactorRegisterMap) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_spreading_factor_register_map();
 }
 
 TEST(Nominal, BandwidthUpdateReconfigure) {
@@ -67,6 +72,11 @@ TEST(Nominal, BandwidthUpdateReconfigure) {
 TEST(Nominal, BandwidthRegisterMap) {
     Rfm9X::Rfm9XManagerTester tester;
     tester.test_bandwidth_register_map();
+}
+
+TEST(Nominal, CodingRateRegisterMap) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_coding_rate_register_map();
 }
 
 TEST(Nominal, ParameterUpdateReconfigure) {
@@ -157,11 +167,6 @@ TEST(Nominal, TransmitEnableIdempotent) {
 TEST(OffNominal, ResetDuringTransmit) {
     Rfm9X::Rfm9XManagerTester tester;
     tester.test_reset_during_transmit();
-}
-
-TEST(OffNominal, StaleSyncRecovery) {
-    Rfm9X::Rfm9XManagerTester tester;
-    tester.test_stale_sync_recovery();
 }
 
 TEST(Nominal, LocalHoldOrdering) {

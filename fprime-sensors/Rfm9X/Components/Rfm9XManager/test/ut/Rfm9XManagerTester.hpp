@@ -15,9 +15,6 @@ namespace Rfm9X {
 class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
   public:
     // Maximum size of histories storing events, telemetry, and port outputs.
-    // Streamed 255-byte packets are drained through many small SPI
-    // transactions, each of which lands in the port history.
-    //! Large enough for a slow-rate scheduler-driven TX plus configure/setup SPI.
     static const U32 MAX_HISTORY_SIZE = 50000;
 
     // Instance ID supplied to the component instance under test
@@ -57,34 +54,40 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! Frames above the native 255-byte RF payload limit are rejected
     void test_transmit_oversize();
 
-    //! Maximum-size (255-byte) packet streamed through the FIFO (REQ-004)
+    //! Maximum-size (255-byte) packet, filled in one standby FIFO burst (REQ-004)
     void test_transmit_large();
 
-    //! FIFO-fit payload (65 B): single standby fill, no in-TX top-up
-    void test_transmit_fifo_fit();
-
-    //! Maximum-size (255-byte) packet received through the FIFO (REQ-006)
+    //! Maximum-size (255-byte) packet received in one FIFO burst (REQ-006)
     void test_receive_large();
-
-    //! FIFO-fit payload received in one PayloadReady drain
-    void test_receive_fifo_fit();
 
     //! Default enum values program the canonical flight/ground register image
     void test_default_register_image();
 
-    //! DBM_20 uses TestPa boost only for a TX and restores safe RX values
-    void test_high_power_boost_recovery();
+    //! LongRangeMode can only be set while RegOpMode.Mode == SLEEP
+    void test_long_range_mode_sleep_gated();
 
-    //! Every exposed data-rate enum maps to the intended bitrate register
-    void test_data_rate_register_map();
+    //! TX stages FifoAddrPtr at FifoTxBaseAddr; RX reads back from FifoRxCurrentAddr
+    void test_fifo_pointer_management();
 
-    //! A live BANDWIDTH_RX parameter update schedules and completes reconfiguration
+    //! RegPktRssiValue/RegPktSnrValue readbacks map to the documented dBm/dB formulas
+    void test_rssi_snr_telemetry();
+
+    //! DIO0 is mapped to TxDone while transmitting and back to RxDone afterward
+    void test_dio0_mapping();
+
+    //! Every exposed spreading-factor enum maps to the intended register value
+    void test_spreading_factor_register_map();
+
+    //! A live BANDWIDTH parameter update schedules and completes reconfiguration
     void test_bandwidth_update_reconfigure();
 
-    //! Every exposed bandwidth enum maps to the intended paired RX/AFC registers
+    //! Every exposed bandwidth enum (10-value range) maps to the intended register value
     void test_bandwidth_register_map();
 
-    //! A live DATA_RATE parameter update schedules and completes reconfiguration
+    //! Every exposed coding-rate enum maps to the intended register value
+    void test_coding_rate_register_map();
+
+    //! A live SPREADING_FACTOR parameter update schedules and completes reconfiguration
     void test_parameter_update_reconfigure();
 
     //! RESET pulses RST and returns the radio to READY without a process restart
@@ -102,7 +105,7 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! Transmission with SPI failures (REQ-008)
     void test_transmit_spi_failure();
 
-    //! A missing PacketSent response times out and returns the radio to RX
+    //! A missing TxDone response times out and returns the radio to RX
     void test_transmit_timeout_recovery();
 
     //! Packet reception and delivery (REQ-006/007/010)
@@ -126,19 +129,16 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! RESET during an active TX returns the buffer and recovers to READY
     void test_reset_during_transmit();
 
-    //! A latched SyncAddressMatch with no FIFO progress triggers RX restart
-    void test_stale_sync_recovery();
-
     //! Local hold mode (comStatusOut unconnected): frames queue in FIFO order
     void test_local_hold_ordering();
 
     //! An absent (unpowered) radio is not detected; recovery follows power-up
     void test_detection_radio_absent();
 
-    //! A busy RF channel (carrier sensed) defers downlink until clear
+    //! A busy RF channel (RegModemStat) defers downlink until clear
     void test_transmit_channel_busy();
 
-    //! Oscillator/PLL settling delays (ModeReady latency) are tolerated
+    //! Oscillator/PLL settling delays are tolerated
     void test_transmit_mode_settle();
 
     private:
@@ -173,9 +173,10 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! Seed the generated parameter source with the canonical default profile
     void setDefaultParameters();
 
-    //! Seed the three FPP parameters before component.loadParameters()
-    void setParameters(const Rfm9XDataRate& dataRate,
-                       const Rfm9XBandwidth& bandwidthRx,
+    //! Seed the four FPP parameters before component.loadParameters()
+    void setParameters(const SpreadingFactor& sf,
+                       const Bandwidth& bw,
+                       const CodingRate& cr,
                        const Rfm9XTxPower& txPower);
 
     //! Connect ports and initialize components (autocoded helpers)
