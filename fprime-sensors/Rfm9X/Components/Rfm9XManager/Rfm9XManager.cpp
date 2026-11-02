@@ -12,6 +12,15 @@
 
 namespace Rfm9X {
 
+// Out-of-class definitions for static constexpr members whose address is
+// taken (e.g. by gtest's ASSERT_EQ in the unit tests), required pre-C++17.
+constexpr U8 Rfm9XManager::FIFO_BASE_ADDR;
+constexpr U32 Rfm9XManager::TX_DONE_TIMEOUT_TICKS;
+constexpr U32 Rfm9XManager::RX_TX_HOLDOFF_TICKS;
+constexpr U32 Rfm9XManager::TX_TX_HOLDOFF_TICKS;
+constexpr U32 Rfm9XManager::RX_HOLDOFF_STARVATION_TICKS;
+constexpr U32 Rfm9XManager::PENDING_TX_DEPTH;
+
 // ----------------------------------------------------------------------
 // Construction, initialization, and destruction
 // ----------------------------------------------------------------------
