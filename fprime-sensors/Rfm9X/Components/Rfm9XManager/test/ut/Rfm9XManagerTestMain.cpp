@@ -174,6 +174,31 @@ TEST(Nominal, LocalHoldOrdering) {
     tester.test_local_hold_ordering();
 }
 
+TEST(Nominal, SendStringCommand) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_send_string_command();
+}
+
+TEST(OffNominal, SendStringZeroSize) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_send_string_zero_size();
+}
+
+TEST(OffNominal, SendStringNotReady) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_send_string_not_ready();
+}
+
+TEST(OffNominal, SendStringBusy) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_send_string_busy();
+}
+
+TEST(Nominal, SendStringNoComSideEffects) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_send_string_no_com_side_effects();
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

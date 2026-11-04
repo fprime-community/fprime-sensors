@@ -62,6 +62,9 @@ module Rfm9X {
         RADIO_FAULT
         @ Local pending-transmit hold was full (ground station only)
         QUEUE_FULL
+        @ Command rejected: radio not READY, a transmit is already active,
+        @ the channel is busy, downlink is disabled, or otherwise blocked
+        NOT_READY
     }
 
     @ Radio bring-up progress, reported as telemetry.
@@ -155,6 +158,9 @@ module Rfm9X {
         @ Pulse hardware RST and then run normal detection/configuration.
         sync command RESET
 
+        @ Test/utility command: stage an ASCII string as the next downlink payload.
+        sync command SEND_STRING(payload: string)
+
         # ----------------------------------------------------------------------
         # Events
         # ----------------------------------------------------------------------
@@ -178,6 +184,10 @@ module Rfm9X {
         @ Event to indicate allocation failure
         event AllocationFailed(allocation_size: FwSizeType) severity warning high \
             format "Failed to allocate buffer of: {} bytes" throttle 2
+
+        @ A command-supplied string payload was staged for transmission
+        event TestPayloadQueued(payloadSize: FwSizeType) severity activity high \
+            format "Queued {} byte command payload for transmission"
 
         # ----------------------------------------------------------------------
         # Telemetry

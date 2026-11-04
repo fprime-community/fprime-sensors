@@ -141,6 +141,26 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! Oscillator/PLL settling delays are tolerated
     void test_transmit_mode_settle();
 
+    //! SEND_STRING stages a command payload through the same TX engine
+    //! dataIn uses, with no dataReturnOut/comStatusOut side effects
+    void test_send_string_command();
+
+    //! SEND_STRING rejects a zero-length payload. (Oversize cannot be
+    //! exercised through this command: Fw::CmdStringArg's fixed capacity
+    //! is well under MAX_PACKET_PAYLOAD, so FPP's own deserialization
+    //! bounds every command-supplied string before the handler runs.)
+    void test_send_string_zero_size();
+
+    //! SEND_STRING rejects when the radio is not READY yet
+    void test_send_string_not_ready();
+
+    //! SEND_STRING rejects while a transmit is already active
+    void test_send_string_busy();
+
+    //! A command-originated send has no Com side effects, and a later
+    //! dataIn-originated send still produces the normal Com pair
+    void test_send_string_no_com_side_effects();
+
     private:
     // ----------------------------------------------------------------------
     // Handlers for typed from ports

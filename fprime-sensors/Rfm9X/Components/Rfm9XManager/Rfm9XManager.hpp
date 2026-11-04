@@ -99,6 +99,17 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
         TX_FAILED
     };
 
+    //! Source of the in-flight transmit buffer. A dataIn-originated buffer
+    //! is Com-owned: completion must return it (dataReturnOut) and update
+    //! comStatusOut. A command-originated buffer (SEND_STRING) has no Com
+    //! owner, so those calls must be skipped — unconditionally invoking
+    //! them would hit an unconnected-port fault in topologies where no
+    //! Svc::ComQueue is wired to this radio yet.
+    enum TxOrigin {
+        TX_ORIGIN_COM,
+        TX_ORIGIN_COMMAND
+    };
+
     // ----------------------------------------------------------------------
     // Handler implementations for typed input ports
     // ----------------------------------------------------------------------
@@ -126,6 +137,13 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     void RESET_cmdHandler(FwOpcodeType opCode,  //!< The command opcode
                           U32 cmdSeq            //!< The command sequence number
                           ) override;
+
+    //! Handler for SEND_STRING: stage a command-supplied string payload
+    //! for transmission through the same engine dataIn uses
+    void SEND_STRING_cmdHandler(FwOpcodeType opCode,          //!< The command opcode
+                                U32 cmdSeq,                   //!< The command sequence number
+                                const Fw::CmdStringArg& payload  //!< Payload to transmit
+                                ) override;
 
     //! Schedule CONFIGURE on the next run tick after a parameter set
     void parameterUpdated(FwPrmIdType id  //!< The parameter ID
@@ -159,7 +177,7 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     void reportRadioState();
 
     //! Stage one native RF packet for scheduler-driven transmission.
-    bool startTransmit(Fw::Buffer& data, const ComCfg::FrameContext& context);
+    bool startTransmit(Fw::Buffer& data, const ComCfg::FrameContext& context, TxOrigin origin);
 
     //! True when this deployment has no ComQueue retry path (comStatusOut unwired).
     //! Ground-station topologies use a local pending-TX hold instead of dropping.
@@ -247,6 +265,14 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     Fw::Buffer m_txBuffer;            //!< Downlink buffer owned by the TX machine
     ComCfg::FrameContext m_txContext; //!< Frame context returned with m_txBuffer
     U32 m_txWaitTicks;                //!< Ticks spent waiting for TxDone
+    //! Source of m_txBuffer: gates dataReturnOut/comStatusOut, which are only
+    //! meaningful for a dataIn (Com-owned) buffer.
+    TxOrigin m_txOrigin;
+    //! Backing storage for a SEND_STRING command payload, wrapped in an
+    //! Fw::Buffer and handed to startTransmit(). No dynamic allocation; safe
+    //! as a single static array because m_txActive already excludes a second
+    //! transmit (command or dataIn) from starting concurrently.
+    U8 m_cmdPayload[MAX_PACKET_PAYLOAD];
 
     //! Local hold used when comStatusOut is unwired (no ComQueue). Mirrors the
     //! Arduino RadioHead ground-station usbHold/retry behavior for half-duplex.

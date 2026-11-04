@@ -952,4 +952,102 @@ void Rfm9XManagerTester ::test_local_hold_ordering() {
     }
 }
 
+void Rfm9XManagerTester ::test_send_string_command() {
+    this->makeReady();
+    // Fw::CmdStringArg is capped at FW_CMD_STRING_MAX_SIZE (16 bytes on this
+    // STM32H7 target, including the null terminator): keep this under 15 chars.
+    const Fw::CmdStringArg payload("HELLO LoRa");
+    this->sendCmd_SEND_STRING(0, 0, payload);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_SEND_STRING, 0, Fw::CmdResponse::OK);
+    ASSERT_EVENTS_TestPayloadQueued_SIZE(1);
+    ASSERT_EVENTS_TestPayloadQueued(0, payload.length());
+    // A command-originated send never touches comStatusOut; watch the
+    // PacketsTransmitted counter (origin-agnostic) for completion instead.
+    for (U32 tick = 0; (tick < 4096) && (this->tlmHistory_PacketsTransmitted->size() == 0); tick++) {
+        this->invoke_to_run(0, 0);
+    }
+    ASSERT_TLM_PacketsTransmitted_SIZE(1);
+    ASSERT_TLM_PacketsTransmitted(0, 1);
+
+    U8 transmitted[MAX_PACKET_PAYLOAD + 1];
+    const FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, payload.length());
+    EXPECT_EQ(::memcmp(transmitted, payload.toChar(), size), 0);
+}
+
+void Rfm9XManagerTester ::test_send_string_zero_size() {
+    this->makeReady();
+    const Fw::CmdStringArg payload("");
+    this->sendCmd_SEND_STRING(0, 0, payload);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_SEND_STRING, 0, Fw::CmdResponse::EXECUTION_ERROR);
+    ASSERT_EVENTS_SendFailed_SIZE(1);
+    ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::INVALID_SIZE);
+    ASSERT_from_spiWriteRead_SIZE(0);
+}
+
+void Rfm9XManagerTester ::test_send_string_not_ready() {
+    // No initialization: the radio is not READY yet.
+    const Fw::CmdStringArg payload("test");
+    this->sendCmd_SEND_STRING(0, 0, payload);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_SEND_STRING, 0, Fw::CmdResponse::EXECUTION_ERROR);
+    ASSERT_EVENTS_SendFailed_SIZE(1);
+    ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::NOT_READY);
+    ASSERT_from_spiWriteRead_SIZE(0);
+}
+
+void Rfm9XManagerTester ::test_send_string_busy() {
+    this->makeReady();
+    // Stall TxDone so the first dataIn-originated transmit stays active.
+    this->m_model.setTxDoneStall(true);
+    U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runTicks(4);
+    ASSERT_from_dataReturnOut_SIZE(0);
+
+    this->clearHistory();
+    const Fw::CmdStringArg payload("busy");
+    this->sendCmd_SEND_STRING(0, 0, payload);
+    ASSERT_CMD_RESPONSE_SIZE(1);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_SEND_STRING, 0, Fw::CmdResponse::EXECUTION_ERROR);
+    ASSERT_EVENTS_SendFailed_SIZE(1);
+    ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::NOT_READY);
+}
+
+void Rfm9XManagerTester ::test_send_string_no_com_side_effects() {
+    this->makeReady();
+    const Fw::CmdStringArg payload("no com effect");
+    this->sendCmd_SEND_STRING(0, 0, payload);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_SEND_STRING, 0, Fw::CmdResponse::OK);
+    // A command-originated send never touches comStatusOut; watch the
+    // PacketsTransmitted counter (origin-agnostic) for completion instead.
+    for (U32 tick = 0; (tick < 4096) && (this->tlmHistory_PacketsTransmitted->size() == 0); tick++) {
+        this->invoke_to_run(0, 0);
+    }
+    ASSERT_TLM_PacketsTransmitted_SIZE(1);
+    // A command-originated send never touches Com-side output ports.
+    ASSERT_from_dataReturnOut_SIZE(0);
+    ASSERT_from_comStatusOut_SIZE(0);
+    U8 transmitted[MAX_PACKET_PAYLOAD + 1];
+    const FwSizeType size = this->m_model.retrievePacket(transmitted, sizeof transmitted);
+    ASSERT_EQ(size, payload.length());
+
+    // A subsequent dataIn-originated send still produces the normal pair,
+    // once the RF-level post-TX holdoff (applies regardless of origin) decays.
+    this->clearHistory();
+    this->runTicks(Rfm9XManager::TX_TX_HOLDOFF_TICKS);
+    U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_dataReturnOut_SIZE(1);
+    ASSERT_from_comStatusOut_SIZE(1);
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+}
+
 }  // namespace Rfm9X
