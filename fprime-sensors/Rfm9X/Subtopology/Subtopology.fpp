@@ -12,7 +12,8 @@ module Rfm9X {
         instance resetGpio
 
         connections Rfm9X {
-            rfm9XManager.spiWriteRead -> spiDriver.SpiWriteRead
+            rfm9XManager.spiWriteRead -> spiDriver.spiWriteReadAsync
+            spiDriver.spiWriteReadAsyncComplete -> rfm9XManager.spiWriteReadComplete
             rfm9XManager.resetGpio -> resetGpio.gpioWrite
         }
     }
@@ -23,7 +24,8 @@ module Rfm9X {
         instance rfm9XSim
 
         connections Rfm9XSim {
-            rfm9XManager.spiWriteRead -> rfm9XSim.SpiWriteRead
+            rfm9XManager.spiWriteRead -> rfm9XSim.spiWriteReadAsync
+            rfm9XSim.spiWriteReadAsyncComplete -> rfm9XManager.spiWriteReadComplete
         }
     }
 }

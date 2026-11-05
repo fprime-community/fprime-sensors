@@ -199,6 +199,16 @@ TEST(Nominal, SendStringNoComSideEffects) {
     tester.test_send_string_no_com_side_effects();
 }
 
+TEST(Nominal, SingleSpiRequestInFlight) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_single_spi_request_in_flight();
+}
+
+TEST(OffNominal, StaleCompletionAfterResetDropped) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_stale_completion_after_reset_dropped();
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

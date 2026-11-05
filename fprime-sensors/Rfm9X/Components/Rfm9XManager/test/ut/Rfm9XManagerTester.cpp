@@ -17,7 +17,12 @@ Rfm9XManagerTester ::Rfm9XManagerTester(bool localHold)
       m_model(),
       m_spiFail(false),
       m_allocFail(false),
-      m_allocation{} {
+      m_allocation{},
+      m_pendingCompletionValid(false),
+      m_pendingPortNum(0),
+      m_pendingWriteBuffer(),
+      m_pendingReadBuffer(),
+      m_pendingStatus(Drv::SpiStatus::SPI_OK) {
     this->initComponents();
     if (localHold) {
         this->connectPortsLocalHold();
@@ -49,6 +54,7 @@ void Rfm9XManagerTester ::connectPortsLocalHold() {
     this->component.set_deallocate_OutputPort(0, this->get_from_deallocate(0));
     this->component.set_resetGpio_OutputPort(0, this->get_from_resetGpio(0));
     this->component.set_spiWriteRead_OutputPort(0, this->get_from_spiWriteRead(0));
+    this->connect_to_spiWriteReadComplete(0, this->component.get_spiWriteReadComplete_InputPort(0));
 }
 
 Rfm9XManagerTester ::~Rfm9XManagerTester() {}
@@ -57,16 +63,62 @@ Rfm9XManagerTester ::~Rfm9XManagerTester() {}
 // Handlers for typed from ports
 // ----------------------------------------------------------------------
 
-Drv::SpiStatus Rfm9XManagerTester ::from_spiWriteRead_handler(FwIndexType portNum,
-                                                              Fw::Buffer& writeBuffer,
-                                                              Fw::Buffer& readBuffer) {
+void Rfm9XManagerTester ::from_spiWriteRead_handler(FwIndexType portNum,
+                                                    Fw::Buffer& writeBuffer,
+                                                    Fw::Buffer& readBuffer) {
     this->pushFromPortEntry_spiWriteRead(writeBuffer, readBuffer);
+    Drv::SpiStatus status = Drv::SpiStatus::SPI_OK;
     if (this->m_spiFail) {
-        return Drv::SpiStatus::SPI_WRITE_ERR;
+        status = Drv::SpiStatus::SPI_WRITE_ERR;
+    } else {
+        EXPECT_EQ(writeBuffer.getSize(), readBuffer.getSize());
+        this->m_model.spiTransaction(writeBuffer.getData(), readBuffer.getData(), writeBuffer.getSize());
     }
-    EXPECT_EQ(writeBuffer.getSize(), readBuffer.getSize());
-    this->m_model.spiTransaction(writeBuffer.getData(), readBuffer.getData(), writeBuffer.getSize());
-    return Drv::SpiStatus::SPI_OK;
+    // Must NOT call invoke_to_spiWriteReadComplete() here: this handler can
+    // run while the component already holds its own m_lock (e.g. issued
+    // from inside spiWriteReadComplete_handler's own continueXxx() chaining
+    // the next step) -- calling back into spiWriteReadComplete_handler
+    // synchronously would re-lock that same non-recursive mutex from the
+    // same call stack. A real async driver never has this problem (the
+    // completion always arrives from a separate, later call via poll()),
+    // so the harness defers delivery the same way: stash it here, and
+    // runOnce()'s drain delivers it afterward, outside any component lock.
+    FW_ASSERT(!this->m_pendingCompletionValid);
+    this->m_pendingCompletionValid = true;
+    this->m_pendingPortNum = portNum;
+    this->m_pendingWriteBuffer = writeBuffer;
+    this->m_pendingReadBuffer = readBuffer;
+    this->m_pendingStatus = status;
+}
+
+void Rfm9XManagerTester ::invoke_to_run(FwIndexType portNum, U32 context) {
+    // Shadows (hides, via same-name lookup) Rfm9XManagerTesterBase's own
+    // invoke_to_run(): every one of this file's many run-tick loops already
+    // calls `this->invoke_to_run(0, 0)`, so routing all of them through here
+    // -- tick, then deliver exactly one pending SPI completion -- requires
+    // no changes at those call sites. See from_spiWriteRead_handler()'s
+    // comment for why delivery must be deferred to here instead of
+    // happening inline inside that handler.
+    this->Rfm9XManagerTesterBase::invoke_to_run(portNum, context);
+    this->drainOnePendingCompletion();
+}
+
+void Rfm9XManagerTester ::drainOnePendingCompletion() {
+    if (!this->m_pendingCompletionValid) {
+        return;
+    }
+    this->m_pendingCompletionValid = false;
+    const FwIndexType portNum = this->m_pendingPortNum;
+    Fw::Buffer writeBuffer = this->m_pendingWriteBuffer;
+    Fw::Buffer readBuffer = this->m_pendingReadBuffer;
+    const Drv::SpiStatus status = this->m_pendingStatus;
+    // Delivering this may itself chain into issuing the *next* request
+    // (continueXxx() calling another issueYyy()), which lands back in
+    // from_spiWriteRead_handler() and sets a new pending completion -- but
+    // that one is intentionally left undelivered until the next runOnce(),
+    // so each external tick advances the sequence by exactly one SPI op,
+    // matching real hardware's one-op-per-callback pacing.
+    this->invoke_to_spiWriteReadComplete(portNum, writeBuffer, readBuffer, status);
 }
 
 Fw::Buffer Rfm9XManagerTester ::from_allocate_handler(FwIndexType portNum, FwSizeType size) {
@@ -131,6 +183,16 @@ void Rfm9XManagerTester ::runUntilTransmitCompletes(U32 maxTicks) {
         }
     }
     FAIL() << "staged RFM9X transmit did not complete within " << maxTicks << " run ticks";
+}
+
+void Rfm9XManagerTester ::runUntilChannelBusyRefreshed() {
+    // channelBusy() is now a cached accessor (m_lastChannelBusy), refreshed
+    // only by the RX sequence's RX_IDLE->RX_CHECK_BUSY->RX_CHECK_FLAGS step
+    // pair -- a MODEM_STAT read followed by its completion. Two ticks is
+    // always enough while idle (not mid-TX): one issues the read, the next
+    // delivers its completion and updates the cache.
+    this->invoke_to_run(0, 0);
+    this->invoke_to_run(0, 0);
 }
 
 // ----------------------------------------------------------------------
@@ -199,6 +261,8 @@ void Rfm9XManagerTester ::test_transmit_channel_busy() {
     // A carrier on the channel asserts RegModemStat activity in RX:
     // listen-before-talk must defer the downlink with FAILURE.
     this->m_model.setChannelBusy(true);
+    this->runUntilChannelBusyRefreshed();
+    this->clearHistory();
     U8 data[16] = {0x5A};
     Fw::Buffer buffer(data, sizeof data);
     ComCfg::FrameContext context;
@@ -210,6 +274,7 @@ void Rfm9XManagerTester ::test_transmit_channel_busy() {
 
     // Channel clears: the same frame now transmits
     this->m_model.setChannelBusy(false);
+    this->runUntilChannelBusyRefreshed();
     this->clearHistory();
     this->invoke_to_dataIn(0, buffer, context);
     this->runUntilTransmitCompletes();
@@ -476,7 +541,9 @@ void Rfm9XManagerTester ::test_bandwidth_update_reconfigure() {
     ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_BANDWIDTH_SET, 0, Fw::CmdResponse::OK);
     ASSERT_from_spiWriteRead_SIZE(0);
 
-    this->invoke_to_run(0, 0);
+    // CONFIGURE now takes many ticks (one SPI op per callback); re-run it
+    // to completion rather than assuming one tick finishes the whole table.
+    this->runUntilReady();
     ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
     ASSERT_from_comStatusOut_SIZE(0);
     // Bw=1000 (250kHz) | CodingRate=001 (4/5) << 1
@@ -545,7 +612,9 @@ void Rfm9XManagerTester ::test_parameter_update_reconfigure() {
     ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_SPREADING_FACTOR_SET, 0, Fw::CmdResponse::OK);
     ASSERT_from_spiWriteRead_SIZE(0);
 
-    this->invoke_to_run(0, 0);
+    // CONFIGURE now takes many ticks (one SPI op per callback); re-run it
+    // to completion rather than assuming one tick finishes the whole table.
+    this->runUntilReady();
     ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
     // SpreadingFactor=9 << 4 | RxPayloadCrcOn=1
     ASSERT_EQ(this->m_model.readRegisterValue(Reg::MODEM_CONFIG_2), 0x94);
@@ -600,6 +669,8 @@ void Rfm9XManagerTester ::test_transmit_dropped_when_busy() {
         uplink[i] = static_cast<U8>(i);
     }
     this->m_model.injectAirData(uplink, sizeof uplink);
+    this->runUntilChannelBusyRefreshed();
+    this->clearHistory();
 
     // Half-duplex: defer downlink with FAILURE so ComQueue can pause
     U8 data[32] = {0xA5};
@@ -1048,6 +1119,73 @@ void Rfm9XManagerTester ::test_send_string_no_com_side_effects() {
     ASSERT_from_dataReturnOut_SIZE(1);
     ASSERT_from_comStatusOut_SIZE(1);
     ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+}
+
+void Rfm9XManagerTester ::test_single_spi_request_in_flight() {
+    // from_spiWriteRead_handler() asserts if a second request arrives while
+    // one is still undelivered (FW_ASSERT(!this->m_pendingCompletionValid)):
+    // driving a full bring-up + TX + RX cycle through the normal tick/drain
+    // pairing in invoke_to_run() is itself the test -- any violation of the
+    // "exactly one SPI op in flight at a time" invariant aborts immediately
+    // rather than silently passing.
+    this->makeReady();
+    U8 data[32];
+    for (FwSizeType i = 0; i < sizeof data; i++) {
+        data[i] = static_cast<U8>(i);
+    }
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    this->runUntilTransmitCompletes();
+    ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
+
+    U8 uplink[16];
+    for (FwSizeType i = 0; i < sizeof uplink; i++) {
+        uplink[i] = static_cast<U8>(0xA0 + i);
+    }
+    this->m_model.injectAirData(uplink, sizeof uplink);
+    for (U32 tick = 0; tick < 1024; tick++) {
+        this->invoke_to_run(0, 0);
+        if (this->fromPortHistory_dataOut->size() > 0) {
+            break;
+        }
+    }
+    ASSERT_from_dataOut_SIZE(1);
+}
+
+void Rfm9XManagerTester ::test_stale_completion_after_reset_dropped() {
+    this->makeReady();
+    U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+    Fw::Buffer buffer(data, sizeof data);
+    ComCfg::FrameContext context;
+    this->invoke_to_dataIn(0, buffer, context);
+    // One tick: TX_REQUEST_STANDBY issues its write and stashes the
+    // completion via from_spiWriteRead_handler(), but invoke_to_run()'s
+    // drain has not run yet inside this single call -- it runs at the end
+    // of this same invoke_to_run(), so grab the still-unconsumed stash by
+    // calling the component's run tick directly instead of through the
+    // draining override, leaving the completion pending.
+    this->Rfm9XManagerTesterBase::invoke_to_run(0, 0);
+    ASSERT_TRUE(this->m_pendingCompletionValid);
+
+    // RESET discards the in-flight sequence (clears m_spiOpOrigin) before
+    // the stashed completion is ever delivered.
+    this->sendCmd_RESET(0, 0);
+    ASSERT_CMD_RESPONSE(0, Rfm9XManagerComponentBase::OPCODE_RESET, 0, Fw::CmdResponse::OK);
+    this->clearHistory();
+
+    // Deliver the stale completion now: it must be dropped silently (the
+    // origin was SPI_OP_TX when issued, but m_spiOpOrigin is SPI_OP_NONE by
+    // the time this arrives) rather than resuming TX state RESET discarded.
+    this->drainOnePendingCompletion();
+    ASSERT_FALSE(this->m_pendingCompletionValid);
+    ASSERT_from_dataReturnOut_SIZE(0);
+    ASSERT_from_comStatusOut_SIZE(0);
+    ASSERT_TLM_PacketsTransmitted_SIZE(0);
+
+    // The radio still recovers normally afterward.
+    this->runUntilReady();
+    ASSERT_EVENTS_RadioReady_SIZE(1);
 }
 
 }  // namespace Rfm9X

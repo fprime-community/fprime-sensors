@@ -12,7 +12,14 @@ namespace Rfm9X {
 // Construction, initialization, and destruction
 // ----------------------------------------------------------------------
 
-Rfm9XSim ::Rfm9XSim(const char* const compName) : Rfm9XSimComponentBase(compName), m_model() {}
+Rfm9XSim ::Rfm9XSim(const char* const compName)
+    : Rfm9XSimComponentBase(compName),
+      m_model(),
+      m_pendingCompletionValid(false),
+      m_pendingPortNum(0),
+      m_pendingWriteBuffer(),
+      m_pendingReadBuffer(),
+      m_pendingStatus(Drv::SpiStatus::SPI_OK) {}
 
 Rfm9XSim ::~Rfm9XSim() {}
 
@@ -20,17 +27,31 @@ Rfm9XSim ::~Rfm9XSim() {}
 // Handler implementations for typed input ports
 // ----------------------------------------------------------------------
 
-Drv::SpiStatus Rfm9XSim ::SpiWriteRead_handler(FwIndexType portNum, Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) {
+void Rfm9XSim ::spiWriteReadAsync_handler(FwIndexType portNum, Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) {
+    Drv::SpiStatus status = Drv::SpiStatus::SPI_OK;
     if ((writeBuffer.getSize() == 0) || (readBuffer.getSize() < writeBuffer.getSize())) {
-        return Drv::SpiStatus::SPI_MISMATCH_ERR;
+        status = Drv::SpiStatus::SPI_MISMATCH_ERR;
+    } else {
+        this->m_model.spiTransaction(writeBuffer.getData(), readBuffer.getData(), writeBuffer.getSize());
+        this->drainTransmittedPackets();
     }
-    this->m_model.spiTransaction(writeBuffer.getData(), readBuffer.getData(), writeBuffer.getSize());
-    this->drainTransmittedPackets();
-    return Drv::SpiStatus::SPI_OK;
+    // Deferred to run(), not delivered inline -- see this port's doc comment
+    // in Rfm9XSim.fpp.
+    FW_ASSERT(!this->m_pendingCompletionValid);
+    this->m_pendingCompletionValid = true;
+    this->m_pendingPortNum = portNum;
+    this->m_pendingWriteBuffer = writeBuffer;
+    this->m_pendingReadBuffer = readBuffer;
+    this->m_pendingStatus = status;
 }
 
-void Rfm9XSim ::SpiReadWrite_handler(FwIndexType portNum, Fw::Buffer& writeBuffer, Fw::Buffer& readBuffer) {
-    (void)this->SpiWriteRead_handler(portNum, writeBuffer, readBuffer);
+void Rfm9XSim ::run_handler(FwIndexType portNum, U32 context) {
+    if (!this->m_pendingCompletionValid) {
+        return;
+    }
+    this->m_pendingCompletionValid = false;
+    this->spiWriteReadAsyncComplete_out(this->m_pendingPortNum, this->m_pendingWriteBuffer, this->m_pendingReadBuffer,
+                                        this->m_pendingStatus);
 }
 
 void Rfm9XSim ::airDataIn_handler(FwIndexType portNum, Fw::Buffer& buffer, const Drv::ByteStreamStatus& status) {

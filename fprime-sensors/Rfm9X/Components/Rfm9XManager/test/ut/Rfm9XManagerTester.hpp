@@ -161,15 +161,36 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! dataIn-originated send still produces the normal Com pair
     void test_send_string_no_com_side_effects();
 
+    //! A second spiWriteRead request while one is already answered-in-flight
+    //! is impossible by construction (run_handler()'s dispatch only starts a
+    //! new step when m_spiOpOrigin == SPI_OP_NONE) -- this proves the
+    //! invariant holds across a full bring-up + TX + RX cycle by asserting
+    //! no more than one from_spiWriteRead entry is ever unanswered at a time.
+    void test_single_spi_request_in_flight();
+
+    //! A stale completion for a request issued before RESET is dropped
+    //! rather than resuming a sequence RESET already discarded. Modeled by
+    //! directly invoking spiWriteReadComplete after beginResetSequence() has
+    //! run, which clears m_spiOpOrigin to SPI_OP_NONE.
+    void test_stale_completion_after_reset_dropped();
+
     private:
     // ----------------------------------------------------------------------
     // Handlers for typed from ports
     // ----------------------------------------------------------------------
 
-    //! Handler for from_spiWriteRead: backed by the register-level sim model
-    Drv::SpiStatus from_spiWriteRead_handler(FwIndexType portNum,
-                                             Fw::Buffer& writeBuffer,
-                                             Fw::Buffer& readBuffer) override;
+    //! Handler for from_spiWriteRead: backed by the register-level sim model.
+    //! No return value (the request is async): runs the sim-model transaction
+    //! immediately (it is plain synchronous C++, no real hardware latency)
+    //! but stashes the outcome in m_pending* rather than delivering it via
+    //! invoke_to_spiWriteReadComplete() inline -- delivering here could
+    //! reenter the component's own (non-recursive) m_lock from the same
+    //! call stack that's already holding it. invoke_to_run() below drains
+    //! the stashed completion afterward, outside any component lock, same
+    //! as a real driver's poll() would from a separate later call.
+    void from_spiWriteRead_handler(FwIndexType portNum,
+                                   Fw::Buffer& writeBuffer,
+                                   Fw::Buffer& readBuffer) override;
 
     //! Handler for from_allocate
     Fw::Buffer from_allocate_handler(FwIndexType portNum, FwSizeType size) override;
@@ -177,6 +198,17 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     // ----------------------------------------------------------------------
     // Helpers
     // ----------------------------------------------------------------------
+
+    //! Shadows Rfm9XManagerTesterBase::invoke_to_run(): ticks the component,
+    //! then delivers exactly one pending SPI completion (see
+    //! from_spiWriteRead_handler()). Every existing `this->invoke_to_run(0, 0)`
+    //! call site in this file already resolves to this override.
+    void invoke_to_run(FwIndexType portNum, U32 context);
+
+    //! Deliver a stashed SPI completion (set by from_spiWriteRead_handler())
+    //! via invoke_to_spiWriteReadComplete(), if one is pending. A no-op if
+    //! no SPI request was issued since the last drain.
+    void drainOnePendingCompletion();
 
     //! Bring the component to the READY state
     void makeReady();
@@ -189,6 +221,13 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
 
     //! Advance run ticks until a staged TX reports SUCCESS or FAILURE.
     void runUntilTransmitCompletes(U32 maxTicks = 4096);
+
+    //! Tick enough times for the RX sequence's RX_CHECK_BUSY step (and its
+    //! completion) to refresh channelBusy()'s cached result at least once.
+    //! Needed before asserting on busy/not-busy immediately after changing
+    //! Rfm9XSimModel's simulated channel-busy state, since channelBusy() no
+    //! longer issues a fresh SPI read of its own.
+    void runUntilChannelBusyRefreshed();
 
     //! Seed the generated parameter source with the canonical default profile
     void setDefaultParameters();
@@ -224,6 +263,14 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
 
     //! Backing memory for the allocate port
     U8 m_allocation[ALLOCATION_SIZE];
+
+    //! Set by from_spiWriteRead_handler() when a request's outcome is ready
+    //! to deliver; drained (and cleared) by drainOnePendingCompletion().
+    bool m_pendingCompletionValid;
+    FwIndexType m_pendingPortNum;
+    Fw::Buffer m_pendingWriteBuffer;
+    Fw::Buffer m_pendingReadBuffer;
+    Drv::SpiStatus m_pendingStatus;
 };
 
 }  // namespace Rfm9X

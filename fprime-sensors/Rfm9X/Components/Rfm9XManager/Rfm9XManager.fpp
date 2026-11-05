@@ -98,8 +98,23 @@ module Rfm9X {
         # Implementation ports
         # ----------------------------------------------------------------------
 
-        @ SPI bus transactions with the radio
-        output port spiWriteRead: Drv.SpiWriteRead
+        @ SPI bus transactions with the radio: issue a request, then resume
+        @ from spiWriteReadComplete once the driver's completion callback
+        @ fires -- never a blocking call. Matches the Stm32SpiDriver
+        @ spiWriteReadAsync/spiWriteReadAsyncComplete port pair (and, for a
+        @ SAMD21 deployment, Samd21::SpiDriver's SpiWriteRead/
+        @ SpiWriteReadComplete) one-for-one, so no adapter component is
+        @ needed on either platform.
+        output port spiWriteRead: Drv.SpiWriteReadRequest
+
+        @ Completion callback for the request above. sync, not async: FPP
+        @ forbids async input on a passive component, and the driver's own
+        @ poll() (both Stm32SpiDriver's and, via activeIn, Samd21::SpiDriver's)
+        @ already invokes the completion port from ordinary non-interrupt
+        @ call context, never from a real ISR -- a synchronous call back into
+        @ this handler is therefore safe, matching how Stm32UartDriver::poll()
+        @ itself calls other sync ports (allocate_out/recv_out) directly.
+        sync input port spiWriteReadComplete: Drv.SpiWriteReadCallback
 
         @ Reset requests through a platform-provided GPIO driver
         output port resetGpio: Drv.GpioWrite
