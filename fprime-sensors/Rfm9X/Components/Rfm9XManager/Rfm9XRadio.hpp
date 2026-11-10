@@ -91,6 +91,11 @@ constexpr U8 SIGNAL_SYNCHRONIZED = 0x02;
 constexpr U8 SIGNAL_DETECTED = 0x01;
 }  // namespace ModemStat
 
+//! RegModemConfig3 bit masks (datasheet section 6.4, address 0x26)
+namespace ModemConfig3 {
+constexpr U8 LOW_DATA_RATE_OPTIMIZE = 0x08;  //!< Bit 3: mandatory for symbol periods > 16 ms
+}  // namespace ModemConfig3
+
 //! RegDioMapping1 Dio0Mapping field values (bits 7-6), datasheet Table 63
 namespace Dio0Mapping {
 constexpr U8 RX_DONE = 0x00;
@@ -121,10 +126,10 @@ constexpr U32 FRF_DIVISOR = 524288;  //!< 2^19
 constexpr U16 FIXED_PREAMBLE_LENGTH = 8;
 
 //! Translate the SPREADING_FACTOR parameter to RegModemConfig2.SpreadingFactor
-//! (datasheet section 6.4: field value equals SF number, 6..12).
+//! (datasheet section 6.4: field value equals SF number, 7..12 -- SF6 is not
+//! a supported value of this enum, see Rfm9XManager.fpp).
 inline bool getSpreadingFactorReg(const SpreadingFactor& value, U8& reg) {
     switch (value) {
-        case SpreadingFactor::SF6:
         case SpreadingFactor::SF7:
         case SpreadingFactor::SF8:
         case SpreadingFactor::SF9:
@@ -185,6 +190,18 @@ inline bool getCodingRateReg(const CodingRate& value, U8& reg) {
 //! Frf = freqHz * 2^19 / 32 MHz (datasheet section 6.4, RegFrLsb)
 inline U32 frequencyToFrf(U32 freqHz) {
     return static_cast<U32>((static_cast<U64>(freqHz) * FRF_DIVISOR) / CRYSTAL_HZ);
+}
+
+//! RegModemConfig3.LowDataRateOptimize (bit 3) must be set whenever one LoRa
+//! symbol lasts longer than 16 ms (datasheet section 4.1.1.5): the symbol
+//! period is 2^SF / bandwidthHz seconds, so the condition is
+//! 2^SF / bandwidthHz > 0.016, rearranged below to stay in integer math.
+//! Without it, long packets drift out of sync and fail CRC -- exactly the
+//! SF11/SF12-at-125kHz (and narrower-bandwidth) combinations long-range
+//! profiles pick those spreading factors for.
+inline bool needsLowDataRateOptimize(const SpreadingFactor& sf, const Bandwidth& bandwidthHz) {
+    const U64 symbolPeriodNumeratorMs = (static_cast<U64>(1) << static_cast<U8>(sf.e)) * 1000ULL;
+    return symbolPeriodNumeratorMs > (static_cast<U64>(bandwidthHz.e) * 16ULL);
 }
 
 //! RFM9X transmitter output power settings on the PA_BOOST pin. On PA_BOOST (datasheet

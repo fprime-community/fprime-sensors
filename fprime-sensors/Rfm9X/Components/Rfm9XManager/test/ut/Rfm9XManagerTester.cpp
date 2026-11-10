@@ -515,7 +515,6 @@ void Rfm9XManagerTester ::test_spreading_factor_register_map() {
         SpreadingFactor sf;
         U8 registerValue;
     } expected[] = {
-        {SpreadingFactor::SF6, 6},
         {SpreadingFactor::SF7, 7},
         {SpreadingFactor::SF8, 8},
         {SpreadingFactor::SF9, 9},
@@ -528,6 +527,34 @@ void Rfm9XManagerTester ::test_spreading_factor_register_map() {
         ASSERT_TRUE(getSpreadingFactorReg(item.sf, reg));
         ASSERT_EQ(reg, item.registerValue);
     }
+}
+
+void Rfm9XManagerTester ::test_low_data_rate_optimize() {
+    // Symbol period Ts = 2^SF / BW; LDRO required when Ts > 16 ms.
+    const struct {
+        SpreadingFactor sf;
+        Bandwidth bw;
+        bool expectLdro;
+    } cases[] = {
+        {SpreadingFactor::SF7, Bandwidth::BW_125_KHZ, false},   // Ts = 1.024 ms
+        {SpreadingFactor::SF10, Bandwidth::BW_125_KHZ, false},  // Ts = 8.192 ms
+        {SpreadingFactor::SF11, Bandwidth::BW_125_KHZ, true},   // Ts = 16.384 ms
+        {SpreadingFactor::SF12, Bandwidth::BW_125_KHZ, true},   // Ts = 32.768 ms
+        {SpreadingFactor::SF11, Bandwidth::BW_250_KHZ, false},  // Ts = 8.192 ms
+        {SpreadingFactor::SF12, Bandwidth::BW_250_KHZ, true},   // Ts = 16.384 ms
+        {SpreadingFactor::SF9, Bandwidth::BW_62_5_KHZ, false},  // Ts = 8.192 ms
+        {SpreadingFactor::SF10, Bandwidth::BW_62_5_KHZ, true},  // Ts = 16.384 ms
+    };
+    for (const auto& item : cases) {
+        ASSERT_EQ(needsLowDataRateOptimize(item.sf, item.bw), item.expectLdro)
+            << "SF=" << static_cast<int>(item.sf.e) << " BW=" << static_cast<U32>(item.bw.e);
+    }
+
+    this->setDefaultParameters();
+    this->paramSet_SPREADING_FACTOR(SpreadingFactor::SF11, Fw::ParamValid::VALID);
+    this->component.loadParameters();
+    this->runUntilReady();
+    ASSERT_TRUE(this->m_model.wasRegisterWritten(Reg::MODEM_CONFIG_3, ModemConfig3::LOW_DATA_RATE_OPTIMIZE));
 }
 
 void Rfm9XManagerTester ::test_bandwidth_update_reconfigure() {

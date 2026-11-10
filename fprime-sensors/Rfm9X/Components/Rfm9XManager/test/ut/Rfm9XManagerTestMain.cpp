@@ -64,6 +64,11 @@ TEST(Nominal, SpreadingFactorRegisterMap) {
     tester.test_spreading_factor_register_map();
 }
 
+TEST(Nominal, LowDataRateOptimize) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_low_data_rate_optimize();
+}
+
 TEST(Nominal, BandwidthUpdateReconfigure) {
     Rfm9X::Rfm9XManagerTester tester;
     tester.test_bandwidth_update_reconfigure();

@@ -469,6 +469,8 @@ void Rfm9XManager ::continueInitializeRadio(const Drv::SpiStatus& status) {
         }
 
         const U32 frf = frequencyToFrf(freqParam);
+        const U8 modemConfig3 =
+            needsLowDataRateOptimize(sfParam, bwParam) ? ModemConfig3::LOW_DATA_RATE_OPTIMIZE : 0x00;
         const ConfigEntry table[CONFIG_TABLE_SIZE] = {
             {Reg::FRF_MSB, static_cast<U8>(frf >> 16)},
             {Reg::FRF_MID, static_cast<U8>(frf >> 8)},
@@ -487,6 +489,10 @@ void Rfm9XManager ::continueInitializeRadio(const Drv::SpiStatus& status) {
             {Reg::FIFO_TX_BASE_ADDR, FIFO_BASE_ADDR},
             {Reg::FIFO_RX_BASE_ADDR, FIFO_BASE_ADDR},
             {Reg::DIO_MAPPING_1, Dio0Mapping::RX_DONE},  // Default to RX mapping; TX flips this before each send
+            // RegModemConfig3: LowDataRateOptimize (bit 3, set whenever the
+            // symbol period exceeds 16 ms -- SF11/SF12 at 125 kHz and more at
+            // narrower bandwidths) | AgcAutoOn=0 (datasheet section 4.1.1.5)
+            {Reg::MODEM_CONFIG_3, modemConfig3},
         };
         (void)::memcpy(this->m_configTable, table, sizeof(table));
 

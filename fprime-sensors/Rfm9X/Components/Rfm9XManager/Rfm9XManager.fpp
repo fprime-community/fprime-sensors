@@ -1,9 +1,11 @@
 module Rfm9X {
     @ LoRa spreading factor (RegModemConfig2.SpreadingFactor, datasheet Table 59).
-    @ Expressed as chips/symbol base-2 logarithm; SF6 requires the special
-    @ implicit-header configuration noted in datasheet section 4.1.1.2.
+    @ Expressed as chips/symbol base-2 logarithm. SF6 is intentionally excluded:
+    @ it requires LoRa implicit-header mode (no length field in the air frame,
+    @ both ends must agree the payload length out-of-band) plus SF6-specific
+    @ RegDetectionOptimize/RegDetectionThreshold writes (datasheet section
+    @ 4.1.1.2), none of which this component implements.
     enum SpreadingFactor : U8 {
-        SF6 = 6
         SF7 = 7
         SF8 = 8
         SF9 = 9

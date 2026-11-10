@@ -436,7 +436,7 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! continueInitializeRadio() the first time it enters the
     //! post-enterLoRaMode() steps (from current FPP parameters) and then
     //! walked one entry per subsequent step via m_configureStep.
-    static constexpr FwSizeType CONFIG_TABLE_SIZE = 15;
+    static constexpr FwSizeType CONFIG_TABLE_SIZE = 16;
     ConfigEntry m_configTable[CONFIG_TABLE_SIZE];
 };
 

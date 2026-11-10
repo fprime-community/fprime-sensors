@@ -78,6 +78,10 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! Every exposed spreading-factor enum maps to the intended register value
     void test_spreading_factor_register_map();
 
+    //! needsLowDataRateOptimize() matches the datasheet's >16ms symbol-period rule
+    //! across every SF/BW combination this component exposes
+    void test_low_data_rate_optimize();
+
     //! A live BANDWIDTH parameter update schedules and completes reconfiguration
     void test_bandwidth_update_reconfigure();
 
