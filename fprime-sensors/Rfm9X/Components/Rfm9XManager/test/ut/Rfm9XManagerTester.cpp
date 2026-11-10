@@ -724,8 +724,8 @@ void Rfm9XManagerTester ::test_downlink_starvation_recovery() {
     // still open a downlink window and resume ComQueue with SUCCESS.
     this->clearHistory();
     bool resumed = false;
-    const U32 keepaliveTicks = Rfm9XManager::RX_TX_HOLDOFF_TICKS - 100;
-    const U32 bound = 3 * Rfm9XManager::RX_HOLDOFF_STARVATION_TICKS;
+    const U32 keepaliveTicks = this->component.getRxTxHoldoffBoundTicks() - 100;
+    const U32 bound = 3 * this->component.getRxHoldoffStarvationTicks();
     for (U32 tick = 0; tick < bound; tick++) {
         if ((tick % keepaliveTicks) == (keepaliveTicks - 1)) {
             this->m_model.injectAirData(uplink, sizeof uplink);
@@ -779,7 +779,7 @@ void Rfm9XManagerTester ::test_transmit_timeout_recovery() {
     Fw::Buffer buffer(data, sizeof data);
     ComCfg::FrameContext context;
     this->invoke_to_dataIn(0, buffer, context);
-    this->runUntilTransmitCompletes(Rfm9XManager::TX_DONE_TIMEOUT_TICKS + 16);
+    this->runUntilTransmitCompletes(this->component.getTxDoneTimeoutTicks() + 16);
 
     ASSERT_EVENTS_SendFailed_SIZE(1);
     ASSERT_EVENTS_SendFailed(0, Rfm9XSendFailure::RADIO_FAULT);
@@ -1001,7 +1001,7 @@ void Rfm9XManagerTester ::test_local_hold_ordering() {
 
     // Re-enable: held frames drain oldest-first, paced by the TX holdoff.
     this->sendCmd_TRANSMIT(0, 1, Rfm9X::TransmitState::ENABLED);
-    for (U32 tick = 0; tick < (4 * Rfm9XManager::TX_TX_HOLDOFF_TICKS); tick++) {
+    for (U32 tick = 0; tick < (4 * this->component.getTxTxHoldoffBoundTicks()); tick++) {
         this->invoke_to_run(0, 0);
         if (this->fromPortHistory_dataReturnOut->size() >= 2) {
             break;
@@ -1110,7 +1110,7 @@ void Rfm9XManagerTester ::test_send_string_no_com_side_effects() {
     // A subsequent dataIn-originated send still produces the normal pair,
     // once the RF-level post-TX holdoff (applies regardless of origin) decays.
     this->clearHistory();
-    this->runTicks(Rfm9XManager::TX_TX_HOLDOFF_TICKS);
+    this->runTicks(this->component.getTxTxHoldoffBoundTicks());
     U8 data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
     Fw::Buffer buffer(data, sizeof data);
     ComCfg::FrameContext context;

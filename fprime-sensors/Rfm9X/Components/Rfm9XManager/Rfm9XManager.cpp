@@ -7,6 +7,7 @@
 // ======================================================================
 
 #include "fprime-sensors/Rfm9X/Components/Rfm9XManager/Rfm9XManager.hpp"
+#include "fprime-sensors/Rfm9X/Components/Rfm9XManager/Rfm9XManagerCfg/FppConstantsAc.hpp"
 #include <Os/Mutex.hpp>
 #include <cstring>
 
@@ -15,12 +16,15 @@ namespace Rfm9X {
 // Out-of-class definitions for static constexpr members whose address is
 // taken (e.g. by gtest's ASSERT_EQ in the unit tests), required pre-C++17.
 constexpr U8 Rfm9XManager::FIFO_BASE_ADDR;
-constexpr U32 Rfm9XManager::TX_DONE_TIMEOUT_TICKS;
-constexpr U32 Rfm9XManager::RX_TX_HOLDOFF_TICKS;
-constexpr U32 Rfm9XManager::TX_TX_HOLDOFF_TICKS;
-constexpr U32 Rfm9XManager::RX_HOLDOFF_STARVATION_TICKS;
 constexpr U32 Rfm9XManager::PENDING_TX_DEPTH;
 constexpr FwSizeType Rfm9XManager::CONFIG_TABLE_SIZE;
+
+namespace {
+//! Round ms up to the nearest whole tick at `tickPeriodMs` per tick
+U32 msToTicks(U32 ms, U32 tickPeriodMs) {
+    return (ms + tickPeriodMs - 1) / tickPeriodMs;
+}
+}  // namespace
 
 // ----------------------------------------------------------------------
 // Construction, initialization, and destruction
@@ -49,6 +53,10 @@ Rfm9XManager ::Rfm9XManager(const char* const compName)
       m_rxTxHoldoffTicks(0),
       m_txTxHoldoffTicks(0),
       m_txStarvedTicks(0),
+      m_txDoneTimeoutTicks(msToTicks(Rfm9X::ManagerCfg::TX_DONE_TIMEOUT_MS, 1)),
+      m_rxTxHoldoffBoundTicks(msToTicks(Rfm9X::ManagerCfg::RX_TX_HOLDOFF_MS, 1)),
+      m_txTxHoldoffBoundTicks(msToTicks(Rfm9X::ManagerCfg::TX_TX_HOLDOFF_MS, 1)),
+      m_rxHoldoffStarvationTicks(msToTicks(Rfm9X::ManagerCfg::RX_HOLDOFF_STARVATION_MS, 1)),
       m_state(RESET_ASSERT),
       m_resetTicks(0),
       m_configured(false),
@@ -63,6 +71,14 @@ Rfm9XManager ::Rfm9XManager(const char* const compName)
       m_configTable{} {}
 
 Rfm9XManager ::~Rfm9XManager() {}
+
+void Rfm9XManager ::configure(U32 tickPeriodMs) {
+    FW_ASSERT(tickPeriodMs > 0, static_cast<FwAssertArgType>(tickPeriodMs));
+    this->m_txDoneTimeoutTicks = msToTicks(Rfm9X::ManagerCfg::TX_DONE_TIMEOUT_MS, tickPeriodMs);
+    this->m_rxTxHoldoffBoundTicks = msToTicks(Rfm9X::ManagerCfg::RX_TX_HOLDOFF_MS, tickPeriodMs);
+    this->m_txTxHoldoffBoundTicks = msToTicks(Rfm9X::ManagerCfg::TX_TX_HOLDOFF_MS, tickPeriodMs);
+    this->m_rxHoldoffStarvationTicks = msToTicks(Rfm9X::ManagerCfg::RX_HOLDOFF_STARVATION_MS, tickPeriodMs);
+}
 
 void Rfm9XManager ::parameterUpdated(FwPrmIdType id) {
     // F´ already stored the new value; defer register rewrite to the next
@@ -179,7 +195,7 @@ void Rfm9XManager ::run_handler(FwIndexType portNum, U32 context) {
     // a pending downlink forever. Bound the total wait and drop the lease.
     if (this->m_comResumeNeeded && (this->m_state == READY) &&
         (this->m_transmitEnabled == TransmitState::ENABLED) && (this->m_rxTxHoldoffTicks > 0)) {
-        if (++this->m_txStarvedTicks >= RX_HOLDOFF_STARVATION_TICKS) {
+        if (++this->m_txStarvedTicks >= this->m_rxHoldoffStarvationTicks) {
             this->m_txStarvedTicks = 0;
             this->m_rxTxHoldoffTicks = 0;
         }
@@ -247,7 +263,7 @@ void Rfm9XManager ::spiWriteReadComplete_handler(FwIndexType portNum, Fw::Buffer
                         // and reacquire the preamble. RF-level pacing applies
                         // regardless of origin: it protects physical radio turnaround,
                         // not the Com protocol.
-                        this->m_txTxHoldoffTicks = TX_TX_HOLDOFF_TICKS;
+                        this->m_txTxHoldoffTicks = this->m_txTxHoldoffBoundTicks;
                     }
                     // m_comResumeNeeded tracks an outstanding Com FAILURE/SUCCESS
                     // obligation; a command-originated buffer was never reported to
@@ -824,7 +840,7 @@ void Rfm9XManager ::continueReceivePoll(const Drv::SpiStatus& status) {
                 this->m_packetsReceived++;
                 this->tlmWrite_PacketsReceived(this->m_packetsReceived);
                 // Keep the half-duplex channel clear for the next ground chunk.
-                this->m_rxTxHoldoffTicks = RX_TX_HOLDOFF_TICKS;
+                this->m_rxTxHoldoffTicks = this->m_rxTxHoldoffBoundTicks;
             }
             this->m_rxState = RX_IDLE;
             break;

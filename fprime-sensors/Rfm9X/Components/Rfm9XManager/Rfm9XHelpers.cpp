@@ -231,7 +231,7 @@ Rfm9XManager::TxProgress Rfm9XManager ::continueAdvanceTransmit(const Drv::SpiSt
             const U8 flags = this->m_miso[1];
             if ((flags & IrqFlags::TX_DONE) != 0) {
                 this->m_txState = TX_CLEAR_TXDONE_IRQ;
-            } else if (++this->m_txWaitTicks >= TX_DONE_TIMEOUT_TICKS) {
+            } else if (++this->m_txWaitTicks >= this->m_txDoneTimeoutTicks) {
                 this->abortTransmit();
             }
             // else: stay in TX_WAIT_TXDONE: advanceTransmit() re-issues the

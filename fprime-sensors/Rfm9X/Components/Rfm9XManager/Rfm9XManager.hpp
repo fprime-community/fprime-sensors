@@ -14,32 +14,6 @@ namespace Rfm9X {
 
 class Rfm9XManager final : public Rfm9XManagerComponentBase {
   public:
-    //! Conservative bound on ticks spent waiting for TxDone after requesting
-    //! TX mode. LoRa time-on-air grows sharply with spreading factor and
-    //! shrinks with bandwidth (datasheet section 4.1.1, Table showing nominal
-    //! bitrate vs. SF/BW/CR); this fixed bound comfortably covers the
-    //! project's SF7/BW125kHz default for a 255-byte payload and is a
-    //! conservative placeholder pending HIL tuning for other SF/BW combinations.
-    static constexpr U32 TX_DONE_TIMEOUT_TICKS = 5000;
-    //! After a completed uplink packet, defer downlink this many 1 kHz ticks.
-    //! This is an RX-priority lease for the half-duplex link: each packet in a
-    //! file burst refreshes it, so flight cannot begin a queued downlink in the
-    //! gap before the next ground chunk. Once the burst ends, TX resumes
-    //! automatically and drains queued TM/events. Carried over from the FSK
-    //! baseline pending HIL retuning for LoRa time-on-air.
-    //! Ground-station local pending-TX hold ignores this timer (channelBusy only).
-    static constexpr U32 RX_TX_HOLDOFF_TICKS = 500;
-    //! Quiet time between consecutive local transmits (1 kHz ticks). Carried
-    //! over from the FSK baseline pending HIL retuning for LoRa time-on-air.
-    static constexpr U32 TX_TX_HOLDOFF_TICKS = 500;
-    //! Upper bound on consecutive ticks a pending downlink may remain blocked
-    //! by the RX-priority lease. Periodic uplink (e.g. GDS keepalives every
-    //! 0.5 s) re-arms RX_TX_HOLDOFF_TICKS on every received packet, which
-    //! would otherwise starve telemetry indefinitely. When the cap expires,
-    //! the lease is dropped so one downlink window opens; an RX actively
-    //! clocking in (channelBusy) is still honored.
-    static constexpr U32 RX_HOLDOFF_STARVATION_TICKS = 2 * RX_TX_HOLDOFF_TICKS;
-
     //! Both FIFO base addresses are set to the start of the 256-byte LoRa
     //! FIFO (datasheet section 4.1.2) rather than the reset defaults
     //! (FifoTxBaseAddr=0x80, FifoRxBaseAddr=0x00), which would only leave
@@ -58,6 +32,24 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
 
     //! Destroy Rfm9XManager object
     ~Rfm9XManager();
+
+    //! Convert Rfm9X.ManagerCfg's millisecond-based timing bounds (TX_DONE_TIMEOUT_MS,
+    //! RX_TX_HOLDOFF_MS, TX_TX_HOLDOFF_MS, RX_HOLDOFF_STARVATION_MS) into tick counts
+    //! for the tick period this instance is actually run at. Must be called once from
+    //! configureTopology(), before run() is ever invoked -- mirrors
+    //! MpuImu::ImuManager::configure()'s shape. Ticks are rounded up so a configured
+    //! millisecond bound is never under-satisfied by a coarser tick period.
+    //! \param tickPeriodMs milliseconds between consecutive run() ticks (e.g. 10 for
+    //!        a 100 Hz rate group)
+    void configure(U32 tickPeriodMs);
+
+    //! Test-only accessors for the tick-count bounds configure()/the constructor
+    //! compute from Rfm9X.ManagerCfg -- let Rfm9XManagerTester assert against the
+    //! actual configured values instead of a removed compile-time constant.
+    U32 getTxDoneTimeoutTicks() const { return this->m_txDoneTimeoutTicks; }
+    U32 getRxTxHoldoffBoundTicks() const { return this->m_rxTxHoldoffBoundTicks; }
+    U32 getTxTxHoldoffBoundTicks() const { return this->m_txTxHoldoffBoundTicks; }
+    U32 getRxHoldoffStarvationTicks() const { return this->m_rxHoldoffStarvationTicks; }
 
   private:
     //! Software lifecycle, advanced one bounded step per run tick:
@@ -394,12 +386,24 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     U8 m_rxPayload[MAX_PACKET_PAYLOAD];
     static_assert(sizeof(m_rxPayload) == MAX_PACKET_PAYLOAD,
                   "RX delivery bounds checks assume m_rxPayload holds MAX_PACKET_PAYLOAD bytes");
-    //! Remaining 1 kHz ticks to defer flight downlink after a completed RX
+    //! Remaining run() ticks to defer flight downlink after a completed RX
     U32 m_rxTxHoldoffTicks;
-    //! Remaining 1 kHz ticks to defer the next local TX after a completed TX
+    //! Remaining run() ticks to defer the next local TX after a completed TX
     U32 m_txTxHoldoffTicks;
     //! Consecutive ticks a pending downlink has been blocked by the RX lease
     U32 m_txStarvedTicks;
+
+    //! Tick-count bounds computed by configure() from Rfm9X.ManagerCfg's
+    //! millisecond constants and this instance's actual tick period --
+    //! replaces the old fixed "1 kHz tick" constants (TX_DONE_TIMEOUT_TICKS,
+    //! RX_TX_HOLDOFF_TICKS, TX_TX_HOLDOFF_TICKS, RX_HOLDOFF_STARVATION_TICKS).
+    //! Initialized in the constructor to the same values configure(1) would
+    //! produce, so an instance that never calls configure() (e.g. a unit
+    //! test) behaves exactly as the old hardcoded constants did.
+    U32 m_txDoneTimeoutTicks;
+    U32 m_rxTxHoldoffBoundTicks;
+    U32 m_txTxHoldoffBoundTicks;
+    U32 m_rxHoldoffStarvationTicks;
 
     RadioState m_state;        //!< Radio management state
     U32 m_resetTicks;          //!< Ticks elapsed in the current reset phase
