@@ -105,7 +105,7 @@ constexpr U8 SPI_WRITE_FLAG = 0x80;
 constexpr U8 SPI_ADDRESS_MASK = 0x7F;
 
 //! Expected RegVersion value for the SX1276-based RFM9X (datasheet section 6.1)
-constexpr U8 VERSION_VALUE = 0x11;
+constexpr U8 VERSION_VALUE = 0x12;
 //! LoRa FIFO size in bytes, shared between TX and RX via base-address pointers
 //! (datasheet section 4.1.2, LoRa Mode FIFO Data Buffer)
 constexpr FwSizeType FIFO_SIZE = 256;

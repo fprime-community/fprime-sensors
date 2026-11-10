@@ -323,8 +323,9 @@ void Rfm9XManager ::initializeRadio() {
             // Optional hardware RST (recommended when a reset GPIO is wired —
             // cold power-up / shared-SPI glitches can leave the radio in a bad
             // state). Never required: skip if unconnected or the write fails.
+            // NRESET is active-low (datasheet 7.2.2): drive LOW to assert.
             if (this->isConnected_resetGpio_OutputPort(0) &&
-                (this->resetGpio_out(0, Fw::Logic::HIGH) == Drv::GpioStatus::OP_OK)) {
+                (this->resetGpio_out(0, Fw::Logic::LOW) == Drv::GpioStatus::OP_OK)) {
                 this->m_resetTicks = 0;
                 this->m_state = RESET_HOLD;
             } else {
@@ -337,7 +338,7 @@ void Rfm9XManager ::initializeRadio() {
                 // Retry the release next tick on failure: advancing with RST
                 // still asserted would leave the radio in reset and mask the
                 // GPIO fault as a generic detection failure.
-                if (this->resetGpio_out(0, Fw::Logic::LOW) == Drv::GpioStatus::OP_OK) {
+                if (this->resetGpio_out(0, Fw::Logic::HIGH) == Drv::GpioStatus::OP_OK) {
                     this->m_resetTicks = 0;
                     this->m_state = RESET_SETTLE;
                 }

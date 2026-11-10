@@ -215,10 +215,10 @@ void Rfm9XManagerTester ::test_initialization() {
     this->runUntilReady();
     ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
     ASSERT_EVENTS_RadioReady_SIZE(1);
-    // Optional RST GPIO is connected in the harness: expect one HIGH then LOW pulse.
+    // Optional RST GPIO is connected in the harness: expect one LOW (assert) then HIGH (release) pulse.
     ASSERT_from_resetGpio_SIZE(2);
-    ASSERT_from_resetGpio(0, Fw::Logic::HIGH);
-    ASSERT_from_resetGpio(1, Fw::Logic::LOW);
+    ASSERT_from_resetGpio(0, Fw::Logic::LOW);
+    ASSERT_from_resetGpio(1, Fw::Logic::HIGH);
     // Initial com status is SUCCESS (ready for the first frame)
     ASSERT_from_comStatusOut_SIZE(1);
     ASSERT_from_comStatusOut(0, Fw::Success(Fw::Success::SUCCESS));
@@ -646,8 +646,8 @@ void Rfm9XManagerTester ::test_reset_recovery() {
     this->runUntilReady();
     ASSERT_EVENTS_ConfigurationFailed_SIZE(0);
     ASSERT_from_resetGpio_SIZE(2);
-    ASSERT_from_resetGpio(0, Fw::Logic::HIGH);
-    ASSERT_from_resetGpio(1, Fw::Logic::LOW);
+    ASSERT_from_resetGpio(0, Fw::Logic::LOW);
+    ASSERT_from_resetGpio(1, Fw::Logic::HIGH);
     ASSERT_from_comStatusOut_SIZE(0);
 
     this->clearHistory();

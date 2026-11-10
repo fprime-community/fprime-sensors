@@ -64,15 +64,15 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! RESET_ASSERT → RESET_HOLD → RESET_SETTLE → DETECT → CONFIGURE → READY.
     //! RESET / parameter updates re-enter earlier states; run retries failures.
     enum RadioState {
-        RESET_ASSERT,  //!< Drive the optional RST line HIGH (skip if unwired)
-        RESET_HOLD,    //!< Hold RST HIGH for RESET_HOLD_TICKS, then drive LOW
+        RESET_ASSERT,  //!< Drive the optional RST line LOW (skip if unwired) -- NRESET is active-low (datasheet 7.2.2)
+        RESET_HOLD,    //!< Hold RST LOW for RESET_HOLD_TICKS, then drive HIGH to release
         RESET_SETTLE,  //!< Wait RESET_SETTLE_TICKS after releasing RST
         DETECT,        //!< Looking for RegVersion on SPI
         CONFIGURE,     //!< Writing profile + entering RX
         READY          //!< Polling RX / accepting TX
     };
 
-    //! RST must be held HIGH at least 100 us (datasheet section 7.2.2); one
+    //! RST must be held LOW at least 100 us (datasheet section 7.2.2); one
     //! 1 kHz tick provides 1 ms with margin.
     static constexpr U32 RESET_HOLD_TICKS = 1;
     //! The radio needs 5 ms after RST release before use (datasheet 7.2.2).
@@ -420,8 +420,8 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! Safe to reuse across the whole bring-up/TX/RX lifetime because
     //! m_spiOpOrigin != SPI_OP_NONE already excludes a second transaction
     //! from starting while one is outstanding.
-    U8 m_mosi[MAX_PACKET_PAYLOAD + 2];
-    U8 m_miso[MAX_PACKET_PAYLOAD + 2];
+    alignas(32) U8 m_mosi[MAX_PACKET_PAYLOAD + 2];
+    alignas(32) U8 m_miso[MAX_PACKET_PAYLOAD + 2];
 
     //! One entry of configureRadio()'s modem-profile register table.
     struct ConfigEntry {
