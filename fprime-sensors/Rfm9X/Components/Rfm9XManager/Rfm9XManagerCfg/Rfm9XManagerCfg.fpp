@@ -17,5 +17,24 @@ module Rfm9X {
         @ Upper bound on time a pending downlink may remain blocked by the
         @ RX-priority lease, in milliseconds.
         constant RX_HOLDOFF_STARVATION_MS = 2 * RX_TX_HOLDOFF_MS
+
+        @ Time to hold resetGpio asserted (LOW) before releasing it, in
+        @ milliseconds. Default covers the SX127x NRESET pulse requirement
+        @ (>=100us, datasheet section 7.2.2) with margin. A deployment that
+        @ wires resetGpio to a power-enable/load-switch GPIO instead of a
+        @ dedicated NRESET line (same LOW=off/HIGH=on drive sequence either
+        @ way) should override this to whatever that switch's own hold
+        @ requirement is, if any.
+        constant RESET_HOLD_MS = 1
+
+        @ Time to wait after releasing resetGpio before assuming the radio is
+        @ ready to talk to, in milliseconds. Default covers the SX127x's own
+        @ post-reset settle time (datasheet section 7.2.2). A power-enable
+        @ deployment should override this to cover its own worst-case
+        @ power-on time instead -- load-switch output capacitor charge time,
+        @ any onboard regulator rise time, and the radio's crystal
+        @ oscillator startup can all be meaningfully longer than a simple
+        @ reset release.
+        constant RESET_SETTLE_MS = 6
     }
 }

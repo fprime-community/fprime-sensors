@@ -69,6 +69,11 @@ TEST(Nominal, LowDataRateOptimize) {
     tester.test_low_data_rate_optimize();
 }
 
+TEST(Nominal, ConfigureTickConversion) {
+    Rfm9X::Rfm9XManagerTester tester;
+    tester.test_configure_tick_conversion();
+}
+
 TEST(Nominal, BandwidthUpdateReconfigure) {
     Rfm9X::Rfm9XManagerTester tester;
     tester.test_bandwidth_update_reconfigure();

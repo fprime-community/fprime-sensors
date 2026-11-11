@@ -57,6 +57,8 @@ Rfm9XManager ::Rfm9XManager(const char* const compName)
       m_rxTxHoldoffBoundTicks(msToTicks(Rfm9X::ManagerCfg::RX_TX_HOLDOFF_MS, 1)),
       m_txTxHoldoffBoundTicks(msToTicks(Rfm9X::ManagerCfg::TX_TX_HOLDOFF_MS, 1)),
       m_rxHoldoffStarvationTicks(msToTicks(Rfm9X::ManagerCfg::RX_HOLDOFF_STARVATION_MS, 1)),
+      m_resetHoldTicks(msToTicks(Rfm9X::ManagerCfg::RESET_HOLD_MS, 1)),
+      m_resetSettleTicks(msToTicks(Rfm9X::ManagerCfg::RESET_SETTLE_MS, 1)),
       m_state(RESET_ASSERT),
       m_resetTicks(0),
       m_configured(false),
@@ -78,6 +80,8 @@ void Rfm9XManager ::configure(U32 tickPeriodMs) {
     this->m_rxTxHoldoffBoundTicks = msToTicks(Rfm9X::ManagerCfg::RX_TX_HOLDOFF_MS, tickPeriodMs);
     this->m_txTxHoldoffBoundTicks = msToTicks(Rfm9X::ManagerCfg::TX_TX_HOLDOFF_MS, tickPeriodMs);
     this->m_rxHoldoffStarvationTicks = msToTicks(Rfm9X::ManagerCfg::RX_HOLDOFF_STARVATION_MS, tickPeriodMs);
+    this->m_resetHoldTicks = msToTicks(Rfm9X::ManagerCfg::RESET_HOLD_MS, tickPeriodMs);
+    this->m_resetSettleTicks = msToTicks(Rfm9X::ManagerCfg::RESET_SETTLE_MS, tickPeriodMs);
 }
 
 void Rfm9XManager ::flushPendingOutputs() {
@@ -400,7 +404,7 @@ void Rfm9XManager ::initializeRadio() {
     }
     switch (this->m_state) {
         case RESET_ASSERT:
-            // Optional hardware RST (recommended when a reset GPIO is wired —
+            // Optional hardware GPIO (recommended when a reset GPIO is wired —
             // cold power-up / shared-SPI glitches can leave the radio in a bad
             // state). Never required: skip if unconnected or the write fails.
             // NRESET is active-low (datasheet 7.2.2): drive LOW to assert.
@@ -414,7 +418,7 @@ void Rfm9XManager ::initializeRadio() {
             this->reportRadioState();
             break;
         case RESET_HOLD:
-            if (++this->m_resetTicks >= RESET_HOLD_TICKS) {
+            if (++this->m_resetTicks >= this->m_resetHoldTicks) {
                 // Retry the release next tick on failure: advancing with RST
                 // still asserted would leave the radio in reset and mask the
                 // GPIO fault as a generic detection failure.
@@ -425,7 +429,7 @@ void Rfm9XManager ::initializeRadio() {
             }
             break;
         case RESET_SETTLE:
-            if (++this->m_resetTicks >= RESET_SETTLE_TICKS) {
+            if (++this->m_resetTicks >= this->m_resetSettleTicks) {
                 this->m_state = DETECT;
                 this->reportRadioState();
             }

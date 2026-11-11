@@ -18,7 +18,9 @@ module Rfm9X {
         """
     }
 
-    @ RFM9X active-high reset line; pin assignment comes from topology state.
+    @ RFM9X reset/power-enable GPIO (active-low NRESET or a power-enable
+    @ load switch -- see Rfm9XManager.fpp's resetGpio port doc comment);
+    @ pin assignment comes from topology state.
     instance resetGpio: Drv.LinuxGpioDriver base id Rfm9X.SubtopologyConfig.BASE_ID + 0x00005000 {
         phase Fpp.ToCpp.Phases.configComponents """
         if (Rfm9X::resetGpio.open(state.rfm9X.device.resetGpioChip, state.rfm9X.device.resetGpioPin,

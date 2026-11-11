@@ -34,11 +34,12 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     ~Rfm9XManager();
 
     //! Convert Rfm9X.ManagerCfg's millisecond-based timing bounds (TX_DONE_TIMEOUT_MS,
-    //! RX_TX_HOLDOFF_MS, TX_TX_HOLDOFF_MS, RX_HOLDOFF_STARVATION_MS) into tick counts
-    //! for the tick period this instance is actually run at. Must be called once from
-    //! configureTopology(), before run() is ever invoked -- mirrors
-    //! MpuImu::ImuManager::configure()'s shape. Ticks are rounded up so a configured
-    //! millisecond bound is never under-satisfied by a coarser tick period.
+    //! RX_TX_HOLDOFF_MS, TX_TX_HOLDOFF_MS, RX_HOLDOFF_STARVATION_MS, RESET_HOLD_MS,
+    //! RESET_SETTLE_MS) into tick counts for the tick period this instance is
+    //! actually run at. Must be called once from configureTopology(), before
+    //! run() is ever invoked -- mirrors MpuImu::ImuManager::configure()'s
+    //! shape. Ticks are rounded up so a configured millisecond bound is
+    //! never under-satisfied by a coarser tick period.
     //! \param tickPeriodMs milliseconds between consecutive run() ticks (e.g. 10 for
     //!        a 100 Hz rate group)
     void configure(U32 tickPeriodMs);
@@ -50,25 +51,34 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     U32 getRxTxHoldoffBoundTicks() const { return this->m_rxTxHoldoffBoundTicks; }
     U32 getTxTxHoldoffBoundTicks() const { return this->m_txTxHoldoffBoundTicks; }
     U32 getRxHoldoffStarvationTicks() const { return this->m_rxHoldoffStarvationTicks; }
+    U32 getResetHoldTicks() const { return this->m_resetHoldTicks; }
+    U32 getResetSettleTicks() const { return this->m_resetSettleTicks; }
 
   private:
     //! Software lifecycle, advanced one bounded step per run tick:
     //! RESET_ASSERT → RESET_HOLD → RESET_SETTLE → DETECT → CONFIGURE → READY.
     //! RESET / parameter updates re-enter earlier states; run retries failures.
+    //!
+    //! resetGpio's drive sequence (LOW then HIGH) is deliberately generic
+    //! enough to serve either of two electrically-identical use cases: a
+    //! dedicated NRESET line (active-low, SX127x datasheet 7.2.2 -- LOW
+    //! asserts reset, HIGH releases it) or a power-enable/load-switch GPIO
+    //! (LOW cuts power, HIGH restores it). Which one a given deployment
+    //! wires up is purely a topology/hardware choice; this component treats
+    //! both identically and only needs the hold/settle durations tuned per
+    //! Rfm9X.ManagerCfg's RESET_HOLD_MS/RESET_SETTLE_MS (a power-enable
+    //! deployment typically needs a longer RESET_SETTLE_MS to cover the
+    //! load switch's own output-capacitor charge time, any onboard
+    //! regulator rise time, and crystal oscillator startup, instead of just
+    //! the radio's own reset-release settle time).
     enum RadioState {
-        RESET_ASSERT,  //!< Drive the optional RST line LOW (skip if unwired) -- NRESET is active-low (datasheet 7.2.2)
-        RESET_HOLD,    //!< Hold RST LOW for RESET_HOLD_TICKS, then drive HIGH to release
-        RESET_SETTLE,  //!< Wait RESET_SETTLE_TICKS after releasing RST
+        RESET_ASSERT,  //!< Drive the optional resetGpio LOW (skip if unwired)
+        RESET_HOLD,    //!< Hold resetGpio LOW for m_resetHoldTicks, then drive HIGH to release
+        RESET_SETTLE,  //!< Wait m_resetSettleTicks after releasing resetGpio
         DETECT,        //!< Looking for RegVersion on SPI
         CONFIGURE,     //!< Writing profile + entering RX
         READY          //!< Polling RX / accepting TX
     };
-
-    //! RST must be held LOW at least 100 us (datasheet section 7.2.2); one
-    //! 1 kHz tick provides 1 ms with margin.
-    static constexpr U32 RESET_HOLD_TICKS = 1;
-    //! The radio needs 5 ms after RST release before use (datasheet 7.2.2).
-    static constexpr U32 RESET_SETTLE_TICKS = 6;
 
     //! Non-blocking downlink sequence. LoRa's FIFO is filled once in Standby
     //! (datasheet section 4.1.5: "The LoRa FIFO can only be filled in
@@ -449,6 +459,11 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     U32 m_rxTxHoldoffBoundTicks;
     U32 m_txTxHoldoffBoundTicks;
     U32 m_rxHoldoffStarvationTicks;
+    //! RESET_HOLD/RESET_SETTLE's duration, same configure()-computed-from-ms
+    //! pattern as the four above -- see RadioState's own doc comment for why
+    //! these cover either a reset-line or a power-enable-GPIO deployment.
+    U32 m_resetHoldTicks;
+    U32 m_resetSettleTicks;
 
     RadioState m_state;        //!< Radio management state
     U32 m_resetTicks;          //!< Ticks elapsed in the current reset phase

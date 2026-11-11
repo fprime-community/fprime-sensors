@@ -82,6 +82,10 @@ class Rfm9XManagerTester : public Rfm9XManagerGTestBase {
     //! across every SF/BW combination this component exposes
     void test_low_data_rate_optimize();
 
+    //! configure() converts Rfm9X.ManagerCfg's millisecond bounds to tick
+    //! counts at a non-1ms tick period, rounding up
+    void test_configure_tick_conversion();
+
     //! A live BANDWIDTH parameter update schedules and completes reconfiguration
     void test_bandwidth_update_reconfigure();
 

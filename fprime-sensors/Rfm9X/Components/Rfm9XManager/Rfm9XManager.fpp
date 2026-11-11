@@ -118,7 +118,11 @@ module Rfm9X {
         @ itself calls other sync ports (allocate_out/recv_out) directly.
         sync input port spiWriteReadComplete: Drv.SpiWriteReadCallback
 
-        @ Reset requests through a platform-provided GPIO driver
+        @ Drives either a dedicated NRESET line or a power-enable/load-switch
+        @ GPIO through a platform-provided GPIO driver -- electrically
+        @ identical from this component's perspective (LOW=off/asserted,
+        @ HIGH=on/released); see RadioState's own doc comment in
+        @ Rfm9XManager.hpp for the full rationale. Optional: skip if unwired.
         output port resetGpio: Drv.GpioWrite
 
         @ Allocation of buffers for received packets

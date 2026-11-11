@@ -4,6 +4,7 @@
 // ======================================================================
 
 #include "Rfm9XManagerTester.hpp"
+#include "fprime-sensors/Rfm9X/Components/Rfm9XManager/Rfm9XManagerCfg/FppConstantsAc.hpp"
 
 namespace Rfm9X {
 
@@ -555,6 +556,27 @@ void Rfm9XManagerTester ::test_low_data_rate_optimize() {
     this->component.loadParameters();
     this->runUntilReady();
     ASSERT_TRUE(this->m_model.wasRegisterWritten(Reg::MODEM_CONFIG_3, ModemConfig3::LOW_DATA_RATE_OPTIMIZE));
+}
+
+void Rfm9XManagerTester ::test_configure_tick_conversion() {
+    // 10 ms/tick (this project's real 100Hz rate group) -- non-trivial
+    // enough that a tick-count bug wouldn't silently match the 1ms default.
+    const U32 tickPeriodMs = 10;
+    this->component.configure(tickPeriodMs);
+
+    auto expectedTicks = [tickPeriodMs](U32 ms) { return (ms + tickPeriodMs - 1) / tickPeriodMs; };
+
+    ASSERT_EQ(this->component.getTxDoneTimeoutTicks(), expectedTicks(Rfm9X::ManagerCfg::TX_DONE_TIMEOUT_MS));
+    ASSERT_EQ(this->component.getRxTxHoldoffBoundTicks(), expectedTicks(Rfm9X::ManagerCfg::RX_TX_HOLDOFF_MS));
+    ASSERT_EQ(this->component.getTxTxHoldoffBoundTicks(), expectedTicks(Rfm9X::ManagerCfg::TX_TX_HOLDOFF_MS));
+    ASSERT_EQ(this->component.getRxHoldoffStarvationTicks(),
+              expectedTicks(Rfm9X::ManagerCfg::RX_HOLDOFF_STARVATION_MS));
+    ASSERT_EQ(this->component.getResetHoldTicks(), expectedTicks(Rfm9X::ManagerCfg::RESET_HOLD_MS));
+    ASSERT_EQ(this->component.getResetSettleTicks(), expectedTicks(Rfm9X::ManagerCfg::RESET_SETTLE_MS));
+
+    // Rounds up, not down: a bound whose ms value doesn't divide evenly by
+    // the tick period must never resolve to fewer ticks than it implies.
+    ASSERT_EQ(expectedTicks(Rfm9X::ManagerCfg::RESET_HOLD_MS), 1u);  // 1 ms at 10 ms/tick -> 1 tick, not 0
 }
 
 void Rfm9XManagerTester ::test_bandwidth_update_reconfigure() {
