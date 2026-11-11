@@ -80,6 +80,64 @@ void Rfm9XManager ::configure(U32 tickPeriodMs) {
     this->m_rxHoldoffStarvationTicks = msToTicks(Rfm9X::ManagerCfg::RX_HOLDOFF_STARVATION_MS, tickPeriodMs);
 }
 
+void Rfm9XManager ::flushPendingOutputs() {
+    PendingOutputs& pending = this->m_pendingOutputs;
+
+    if (pending.spiRequest) {
+        pending.spiRequest = false;
+        Fw::Buffer writeBuffer(this->m_mosi, pending.spiRequestSize);
+        Fw::Buffer readBuffer(this->m_miso, pending.spiRequestSize);
+        this->spiWriteRead_out(pending.spiRequestPortNum, writeBuffer, readBuffer);
+    }
+    if (pending.logConfigurationFailed) {
+        pending.logConfigurationFailed = false;
+        this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+    }
+    if (pending.radioStateChanged) {
+        pending.radioStateChanged = false;
+        this->tlmWrite_RadioState(pending.radioState);
+    }
+    if (pending.logRadioReady) {
+        pending.logRadioReady = false;
+        this->log_ACTIVITY_HI_RadioReady();
+    }
+    if (pending.emitComReady) {
+        pending.emitComReady = false;
+        if (this->isConnected_comStatusOut_OutputPort(0)) {
+            Fw::Success ready = Fw::Success::SUCCESS;
+            this->comStatusOut_out(0, ready);
+        }
+    }
+    if (pending.logSendFailedRadioFault) {
+        pending.logSendFailedRadioFault = false;
+        this->log_WARNING_HI_SendFailed(Rfm9XSendFailure::RADIO_FAULT);
+    }
+    if (pending.logSendFailed) {
+        pending.logSendFailed = false;
+        this->log_WARNING_HI_SendFailed(pending.sendFailedReason);
+    }
+    if (pending.packetsTransmittedChanged) {
+        pending.packetsTransmittedChanged = false;
+        this->tlmWrite_PacketsTransmitted(pending.packetsTransmitted);
+    }
+    if (pending.rxCrcErrorsChanged) {
+        pending.rxCrcErrorsChanged = false;
+        this->tlmWrite_RxCrcErrors(pending.rxCrcErrors);
+    }
+    if (pending.packetsReceivedChanged) {
+        pending.packetsReceivedChanged = false;
+        this->tlmWrite_PacketsReceived(pending.packetsReceived);
+    }
+    if (pending.rssiChanged) {
+        pending.rssiChanged = false;
+        this->tlmWrite_LastPacketRssi(pending.rssiDbm);
+    }
+    if (pending.snrChanged) {
+        pending.snrChanged = false;
+        this->tlmWrite_LastPacketSnr(pending.snrDb);
+    }
+}
+
 void Rfm9XManager ::parameterUpdated(FwPrmIdType id) {
     // F´ already stored the new value; defer register rewrite to the next
     // run tick, which re-reads params during CONFIGURE.
@@ -146,6 +204,7 @@ void Rfm9XManager ::dataIn_handler(FwIndexType portNum, Fw::Buffer& data, const 
             }
         }
     }
+    this->flushPendingOutputs();
     if (!accepted && !held) {
         this->dataReturnOut_out(0, data, context);
         this->emitComStatus(Fw::Success::FAILURE);
@@ -160,6 +219,9 @@ void Rfm9XManager ::run_handler(FwIndexType portNum, U32 context) {
     bool resume = false;
     U8 rxPacket[MAX_PACKET_PAYLOAD];
     FwSizeType rxPacketSize = 0;
+    Fw::Buffer dropBuffer;
+    ComCfg::FrameContext dropContext;
+    bool dropPending = false;
     {
     Os::ScopeLock lock(this->m_lock);
     if (this->m_spiOpOrigin == SPI_OP_NONE) {
@@ -171,11 +233,8 @@ void Rfm9XManager ::run_handler(FwIndexType portNum, U32 context) {
             (void)this->advanceTransmit();
         } else if (this->m_state == READY) {
             // Drain local GS hold before RX poll so uplink is not starved by TM.
-            Fw::Buffer dropBuffer;
-            ComCfg::FrameContext dropContext;
-            if (this->tryStartPendingTransmit(dropBuffer, dropContext)) {
-                this->dataReturnOut_out(0, dropBuffer, dropContext);
-            } else if (!this->m_txActive) {
+            dropPending = this->tryStartPendingTransmit(dropBuffer, dropContext);
+            if (!dropPending && !this->m_txActive) {
                 this->pollReceive();
             }
         } else {
@@ -211,6 +270,10 @@ void Rfm9XManager ::run_handler(FwIndexType portNum, U32 context) {
         this->m_rxDeliverSize = 0;
         (void)::memcpy(rxPacket, this->m_rxPayload, rxPacketSize);
     }
+    }
+    this->flushPendingOutputs();
+    if (dropPending) {
+        this->dataReturnOut_out(0, dropBuffer, dropContext);
     }
     if (rxPacketSize > 0) {
         this->deliverReceivedPacket(rxPacket, rxPacketSize);
@@ -293,6 +356,7 @@ void Rfm9XManager ::spiWriteReadComplete_handler(FwIndexType portNum, Fw::Buffer
         }
     }
     }
+    this->flushPendingOutputs();
     if (rxPacketSize > 0) {
         this->deliverReceivedPacket(rxPacket, rxPacketSize);
     }
@@ -387,7 +451,7 @@ void Rfm9XManager ::continueInitializeRadio(const Drv::SpiStatus& status) {
             this->m_configureStep = 0;
             this->reportRadioState();
         } else {
-            this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+            this->m_pendingOutputs.logConfigurationFailed = true;
         }
         return;
     }
@@ -400,7 +464,7 @@ void Rfm9XManager ::continueInitializeRadio(const Drv::SpiStatus& status) {
     // succeeded." Steps 1+ always come from a real completion.
     const bool ok = (this->m_configureStep == 0) || (status == Drv::SpiStatus::SPI_OK);
     if (!ok) {
-        this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+        this->m_pendingOutputs.logConfigurationFailed = true;
         this->m_configureStep = 0;
         return;
     }
@@ -428,31 +492,31 @@ void Rfm9XManager ::continueInitializeRadio(const Drv::SpiStatus& status) {
         Fw::ParamValid isValid = Fw::ParamValid::INVALID;
         const SpreadingFactor sfParam = this->paramGet_SPREADING_FACTOR(isValid);
         if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
-            this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+            this->m_pendingOutputs.logConfigurationFailed = true;
             this->m_configureStep = 0;
             return;
         }
         const Bandwidth bwParam = this->paramGet_BANDWIDTH(isValid);
         if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
-            this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+            this->m_pendingOutputs.logConfigurationFailed = true;
             this->m_configureStep = 0;
             return;
         }
         const CodingRate crParam = this->paramGet_CODING_RATE(isValid);
         if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
-            this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+            this->m_pendingOutputs.logConfigurationFailed = true;
             this->m_configureStep = 0;
             return;
         }
         const U32 freqParam = this->paramGet_FREQUENCY_HZ(isValid);
         if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
-            this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+            this->m_pendingOutputs.logConfigurationFailed = true;
             this->m_configureStep = 0;
             return;
         }
         const Rfm9XTxPower txPowerParam = this->paramGet_TX_POWER(isValid);
         if ((isValid != Fw::ParamValid::VALID) && (isValid != Fw::ParamValid::DEFAULT)) {
-            this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+            this->m_pendingOutputs.logConfigurationFailed = true;
             this->m_configureStep = 0;
             return;
         }
@@ -463,7 +527,7 @@ void Rfm9XManager ::continueInitializeRadio(const Drv::SpiStatus& status) {
         TxPowerSetting power{};
         if (!getSpreadingFactorReg(sfParam, sfReg) || !getBandwidthReg(bwParam, bwReg) ||
             !getCodingRateReg(crParam, crReg) || !getTxPowerSetting(txPowerParam, power)) {
-            this->log_WARNING_HI_ConfigurationFailed(Rfm9XMode::Receive);
+            this->m_pendingOutputs.logConfigurationFailed = true;
             this->m_configureStep = 0;
             return;
         }
@@ -530,13 +594,12 @@ void Rfm9XManager ::continueInitializeRadio(const Drv::SpiStatus& status) {
     this->m_state = READY;
     this->m_configureStep = 0;
     this->reportRadioState();
-    this->log_ACTIVITY_HI_RadioReady();
+    this->m_pendingOutputs.logRadioReady = true;
     // Com status is a one-time startup handshake. Sending an extra SUCCESS
     // after a hardware reset is invalid while the downstream aggregator is
     // already READY and causes it to assert.
-    if (!this->m_comStatusAnnounced && this->isConnected_comStatusOut_OutputPort(0)) {
-        Fw::Success ready = Fw::Success::SUCCESS;
-        this->comStatusOut_out(0, ready);
+    if (!this->m_comStatusAnnounced) {
+        this->m_pendingOutputs.emitComReady = true;
         this->m_comStatusAnnounced = true;
     }
 }
@@ -570,14 +633,16 @@ void Rfm9XManager ::reportRadioState() {
         default:
             break;
     }
-    this->tlmWrite_RadioState(state);
+    this->m_pendingOutputs.radioStateChanged = true;
+    this->m_pendingOutputs.radioState = state;
 }
 
 bool Rfm9XManager ::startTransmit(Fw::Buffer& data, const ComCfg::FrameContext& context, TxOrigin origin) {
     // One Com buffer → one RF packet (1..255). No radio-layer split/reassembly.
     const FwSizeType size = data.getSize();
     if ((data.getData() == nullptr) || (size == 0) || (size > MAX_PACKET_PAYLOAD)) {
-        this->log_WARNING_HI_SendFailed(Rfm9XSendFailure::INVALID_SIZE);
+        this->m_pendingOutputs.logSendFailed = true;
+        this->m_pendingOutputs.sendFailedReason = Rfm9XSendFailure::INVALID_SIZE;
         return false;
     }
     this->m_txBuffer = data;
@@ -597,7 +662,8 @@ bool Rfm9XManager ::usesLocalTxHold() const {
 
 bool Rfm9XManager ::enqueuePendingTransmit(Fw::Buffer& data, const ComCfg::FrameContext& context) {
     if (this->m_pendingTxCount >= PENDING_TX_DEPTH) {
-        this->log_WARNING_HI_SendFailed(Rfm9XSendFailure::QUEUE_FULL);
+        this->m_pendingOutputs.logSendFailed = true;
+        this->m_pendingOutputs.sendFailedReason = Rfm9XSendFailure::QUEUE_FULL;
         return false;
     }
     this->m_pendingTxBuffers[this->m_pendingTxCount] = data;
@@ -689,6 +755,7 @@ void Rfm9XManager ::RESET_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) {
         // bounded step per run() tick, so no command-context blocking occurs.
         this->beginResetSequence();
     }
+    this->flushPendingOutputs();  // beginResetSequence() -> reportRadioState() stages tlmWrite_RadioState
     if (abortPending && abortIsCom) {
         this->dataReturnOut_out(0, abortBuffer, abortContext);
         this->emitComStatus(Fw::Success::FAILURE);
@@ -716,6 +783,7 @@ void Rfm9XManager ::SEND_STRING_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, cons
             accepted = this->startTransmit(buffer, cmdContext, TX_ORIGIN_COMMAND);
         }
     }
+    this->flushPendingOutputs();
     if (accepted) {
         this->log_ACTIVITY_HI_TestPayloadQueued(size);
         this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
@@ -776,7 +844,8 @@ void Rfm9XManager ::continueReceivePoll(const Drv::SpiStatus& status) {
         case RX_CLEAR_FLAGS:
             if ((this->m_rxIrqFlags & IrqFlags::PAYLOAD_CRC_ERROR) != 0) {
                 this->m_rxCrcErrors++;
-                this->tlmWrite_RxCrcErrors(this->m_rxCrcErrors);
+                this->m_pendingOutputs.rxCrcErrorsChanged = true;
+                this->m_pendingOutputs.rxCrcErrors = this->m_rxCrcErrors;
                 this->m_rxState = RX_IDLE;
                 break;
             }
@@ -844,7 +913,8 @@ void Rfm9XManager ::continueReceivePoll(const Drv::SpiStatus& status) {
                 (void)::memcpy(this->m_rxPayload, &this->m_miso[1], this->m_rxPacketLength);
                 this->m_rxDeliverSize = this->m_rxPacketLength;
                 this->m_packetsReceived++;
-                this->tlmWrite_PacketsReceived(this->m_packetsReceived);
+                this->m_pendingOutputs.packetsReceivedChanged = true;
+                this->m_pendingOutputs.packetsReceived = this->m_packetsReceived;
                 // Keep the half-duplex channel clear for the next ground chunk.
                 this->m_rxTxHoldoffTicks = this->m_rxTxHoldoffBoundTicks;
             }

@@ -320,6 +320,51 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     void applyRssiReading(U8 rawValue);
     void applySnrReading(U8 rawValue);
 
+    //! Every output-port call (spiWriteRead_out, log_*, tlmWrite_*,
+    //! comStatusOut_out) reached from code that runs under m_lock stages its
+    //! call here instead of calling directly.
+    struct PendingOutputs {
+        bool spiRequest = false;
+        FwIndexType spiRequestPortNum = 0;
+        FwSizeType spiRequestSize = 0;
+
+        bool logConfigurationFailed = false;
+        bool logRadioReady = false;
+        bool emitComReady = false;  // one-time startup handshake (m_comStatusAnnounced)
+
+        bool radioStateChanged = false;
+        Rfm9XRadioState radioState = Rfm9XRadioState::NOT_STARTED;
+
+        bool logSendFailedRadioFault = false;  // abortTransmit()
+        //! startTransmit()/enqueuePendingTransmit()'s own failure reason --
+        //! distinct from logSendFailedRadioFault since these two report a
+        //! caller-supplied reason (INVALID_SIZE/QUEUE_FULL), not a fixed one.
+        bool logSendFailed = false;
+        Rfm9XSendFailure sendFailedReason = Rfm9XSendFailure::INVALID_SIZE;
+        bool packetsTransmittedChanged = false;
+        U32 packetsTransmitted = 0;
+
+        bool rxCrcErrorsChanged = false;
+        U32 rxCrcErrors = 0;
+        bool packetsReceivedChanged = false;
+        U32 packetsReceived = 0;
+        bool rssiChanged = false;
+        F32 rssiDbm = 0.0f;
+        bool snrChanged = false;
+        F32 snrDb = 0.0f;
+    };
+
+    //! Call every output port named by a pending flag/value in
+    //! m_pendingOutputs, then clear it. Must be called only after m_lock has
+    //! been released -- run_handler()/spiWriteReadComplete_handler() are the
+    //! sole callers, immediately after their own lock scope closes. Safe as
+    //! a single member (not a value threaded through every helper's
+    //! signature) because this component is single-threaded: run(),
+    //! spiWriteReadComplete(), and the command handlers never execute
+    //! concurrently, so at most one lock scope -- and therefore one batch of
+    //! staged outputs -- is ever open at a time.
+    void flushPendingOutputs();
+
     // ----------------------------------------------------------------------
     // Member variables
     // ----------------------------------------------------------------------
@@ -426,6 +471,10 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
     //! from starting while one is outstanding.
     alignas(32) U8 m_mosi[MAX_PACKET_PAYLOAD + 2];
     alignas(32) U8 m_miso[MAX_PACKET_PAYLOAD + 2];
+
+    //! Output calls staged by code running under m_lock, drained by
+    //! flushPendingOutputs() after the lock releases.
+    PendingOutputs m_pendingOutputs;
 
     //! One entry of configureRadio()'s modem-profile register table.
     struct ConfigEntry {

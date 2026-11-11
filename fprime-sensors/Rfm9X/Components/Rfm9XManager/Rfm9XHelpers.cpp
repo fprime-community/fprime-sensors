@@ -23,20 +23,22 @@ void Rfm9XManager ::issueReadRegister(U8 address, SpiOpOrigin origin) {
     // Single access read: address byte (wnr=0) then one dummy byte
     this->m_mosi[0] = address & SPI_ADDRESS_MASK;
     this->m_mosi[1] = 0;
-    Fw::Buffer writeBuffer(this->m_mosi, 2);
-    Fw::Buffer readBuffer(this->m_miso, 2);
     this->m_spiOpOrigin = origin;
-    this->spiWriteRead_out(0, writeBuffer, readBuffer);
+    // The actual spiWriteRead_out() call is deferred to flushPendingOutputs(),
+    // called by run_handler()/spiWriteReadComplete_handler() after m_lock releases.
+    this->m_pendingOutputs.spiRequest = true;
+    this->m_pendingOutputs.spiRequestPortNum = 0;
+    this->m_pendingOutputs.spiRequestSize = 2;
 }
 
 void Rfm9XManager ::issueWriteRegister(U8 address, U8 value, SpiOpOrigin origin) {
     // Single access write: address byte with wnr=1 then the data byte
     this->m_mosi[0] = (address & SPI_ADDRESS_MASK) | SPI_WRITE_FLAG;
     this->m_mosi[1] = value;
-    Fw::Buffer writeBuffer(this->m_mosi, 2);
-    Fw::Buffer readBuffer(this->m_miso, 2);
     this->m_spiOpOrigin = origin;
-    this->spiWriteRead_out(0, writeBuffer, readBuffer);
+    this->m_pendingOutputs.spiRequest = true;
+    this->m_pendingOutputs.spiRequestPortNum = 0;
+    this->m_pendingOutputs.spiRequestSize = 2;
 }
 
 void Rfm9XManager ::issueWriteFifo(const U8* data, FwSizeType size, SpiOpOrigin origin) {
@@ -44,20 +46,20 @@ void Rfm9XManager ::issueWriteFifo(const U8* data, FwSizeType size, SpiOpOrigin 
     FW_ASSERT((size + 1) <= sizeof this->m_mosi, static_cast<FwAssertArgType>(size));
     this->m_mosi[0] = Reg::FIFO | SPI_WRITE_FLAG;
     (void)::memcpy(&this->m_mosi[1], data, size);
-    Fw::Buffer writeBuffer(this->m_mosi, size + 1);
-    Fw::Buffer readBuffer(this->m_miso, size + 1);
     this->m_spiOpOrigin = origin;
-    this->spiWriteRead_out(0, writeBuffer, readBuffer);
+    this->m_pendingOutputs.spiRequest = true;
+    this->m_pendingOutputs.spiRequestPortNum = 0;
+    this->m_pendingOutputs.spiRequestSize = size + 1;
 }
 
 void Rfm9XManager ::issueReadFifo(FwSizeType size, SpiOpOrigin origin) {
     FW_ASSERT((size + 1) <= sizeof this->m_mosi, static_cast<FwAssertArgType>(size));
     this->m_mosi[0] = Reg::FIFO;
     (void)::memset(&this->m_mosi[1], 0, size);
-    Fw::Buffer writeBuffer(this->m_mosi, size + 1);
-    Fw::Buffer readBuffer(this->m_miso, size + 1);
     this->m_spiOpOrigin = origin;
-    this->spiWriteRead_out(0, writeBuffer, readBuffer);
+    this->m_pendingOutputs.spiRequest = true;
+    this->m_pendingOutputs.spiRequestPortNum = 0;
+    this->m_pendingOutputs.spiRequestSize = size + 1;
 }
 
 void Rfm9XManager ::issueDetectRadio() {
@@ -88,7 +90,7 @@ bool Rfm9XManager ::downlinkBlocked() {
 // ----------------------------------------------------------------------
 
 void Rfm9XManager ::abortTransmit() {
-    this->log_WARNING_HI_SendFailed(Rfm9XSendFailure::RADIO_FAULT);
+    this->m_pendingOutputs.logSendFailedRadioFault = true;
     this->m_txState = TX_ABORT_CLEAR_IRQ;
 }
 
@@ -259,7 +261,8 @@ Rfm9XManager::TxProgress Rfm9XManager ::continueAdvanceTransmit(const Drv::SpiSt
                 break;
             }
             this->m_packetsTransmitted++;
-            this->tlmWrite_PacketsTransmitted(this->m_packetsTransmitted);
+            this->m_pendingOutputs.packetsTransmittedChanged = true;
+            this->m_pendingOutputs.packetsTransmitted = this->m_packetsTransmitted;
             this->log_WARNING_HI_ConfigurationFailed_ThrottleClear();
             this->log_WARNING_HI_SendFailed_ThrottleClear();
             return TX_SUCCEEDED;
@@ -289,12 +292,14 @@ Rfm9XManager::TxProgress Rfm9XManager ::continueAdvanceTransmit(const Drv::SpiSt
 
 void Rfm9XManager ::applyRssiReading(U8 rawValue) {
     // RSSI [dBm] = -137 + PacketRssi (datasheet section 6.4, RegPktRssiValue)
-    this->tlmWrite_LastPacketRssi(-137.0f + static_cast<F32>(rawValue));
+    this->m_pendingOutputs.rssiChanged = true;
+    this->m_pendingOutputs.rssiDbm = -137.0f + static_cast<F32>(rawValue);
 }
 
 void Rfm9XManager ::applySnrReading(U8 rawValue) {
     // SNR [dB] = PacketSnr (two's complement) / 4 (datasheet section 6.4, RegPktSnrValue)
-    this->tlmWrite_LastPacketSnr(static_cast<F32>(static_cast<I8>(rawValue)) / 4.0f);
+    this->m_pendingOutputs.snrChanged = true;
+    this->m_pendingOutputs.snrDb = static_cast<F32>(static_cast<I8>(rawValue)) / 4.0f;
 }
 
 }  // namespace Rfm9X
