@@ -12,6 +12,7 @@
 
 #include <Fw/FPrimeBasicTypes.hpp>
 #include "fprime-sensors/Rfm9X/Components/Rfm9XManager/Rfm9XManagerComponentAc.hpp"
+#include "fprime-sensors/Rfm9X/Components/Rfm9XManager/Rfm9XManagerCfg/FppConstantsAc.hpp"
 
 namespace Rfm9X {
 
@@ -114,8 +115,12 @@ constexpr U8 VERSION_VALUE = 0x12;
 //! LoRa FIFO size in bytes, shared between TX and RX via base-address pointers
 //! (datasheet section 4.1.2, LoRa Mode FIFO Data Buffer)
 constexpr FwSizeType FIFO_SIZE = 256;
-//! RFM9X LoRa packet payload maximum (RegPayloadLength is one byte)
-constexpr FwSizeType MAX_PACKET_PAYLOAD = 255;
+//! RFM9X LoRa packet payload maximum (RegPayloadLength is one byte, so this
+//! can never exceed 255 regardless of Rfm9X.ManagerCfg.MAX_PAYLOAD_LENGTH's
+//! override). Sizes every fixed payload/scratch buffer in Rfm9XManager and
+//! Rfm9XSim -- see Rfm9XManagerCfg.fpp's own doc comment on that constant.
+constexpr FwSizeType MAX_PACKET_PAYLOAD = Rfm9X::ManagerCfg::MAX_PAYLOAD_LENGTH;
+static_assert(MAX_PACKET_PAYLOAD <= 255, "RegPayloadLength/RX_NB_BYTES are one byte wide");
 //! Frf register step size: 32 MHz crystal / 2^19 (datasheet section 6.4, RegFrLsb)
 constexpr U32 CRYSTAL_HZ = 32000000;
 constexpr U32 FRF_DIVISOR = 524288;  //!< 2^19

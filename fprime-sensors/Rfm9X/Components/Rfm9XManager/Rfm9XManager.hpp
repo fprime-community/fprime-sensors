@@ -429,9 +429,15 @@ class Rfm9XManager final : public Rfm9XManagerComponentBase {
 
     //! Local hold used when comStatusOut is unwired (no ComQueue). Mirrors the
     //! Arduino RadioHead ground-station usbHold/retry behavior for half-duplex.
-    //! Sized to the GS frame-bin pool (8×272) so a short GDS burst cannot
-    //! overflow and drop mid-file CFDP DATA packets (flight ignores this hold).
-    static constexpr U32 PENDING_TX_DEPTH = 8;
+    //! Depth comes from Rfm9X.ManagerCfg.PENDING_TX_DEPTH -- see that
+    //! constant's own doc comment: each slot costs one Fw::Buffer + one
+    //! ComCfg::FrameContext (~168 bytes on a 32-bit target), the single
+    //! largest RAM cost in this component at the library default of 8
+    //! (sized to the GS frame-bin pool so a short GDS burst cannot overflow
+    //! and drop mid-file CFDP DATA packets). A deployment with a real
+    //! ComQueue wired to comStatusOut (usesLocalTxHold() false) never fills
+    //! this queue and can override it down to 0 or 1.
+    static constexpr U32 PENDING_TX_DEPTH = Rfm9X::ManagerCfg::PENDING_TX_DEPTH;
     Fw::Buffer m_pendingTxBuffers[PENDING_TX_DEPTH];
     ComCfg::FrameContext m_pendingTxContexts[PENDING_TX_DEPTH];
     U32 m_pendingTxCount;

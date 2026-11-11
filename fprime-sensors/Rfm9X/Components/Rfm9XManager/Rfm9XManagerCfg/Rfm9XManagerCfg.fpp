@@ -36,5 +36,23 @@ module Rfm9X {
         @ oscillator startup can all be meaningfully longer than a simple
         @ reset release.
         constant RESET_SETTLE_MS = 6
+
+        @ Maximum LoRa packet payload, in bytes. The SX127x's RegPayloadLength/
+        @ RX_NB_BYTES registers are one byte wide, so this can never exceed
+        @ 255 regardless of the override. Sizes every fixed payload/scratch
+        @ buffer in Rfm9XManager and Rfm9XSim (m_mosi/m_miso/m_rxPayload/
+        @ m_cmdPayload each scale with this) -- a project that only ever
+        @ sends short packets can shrink this to cut RAM; 255 keeps full
+        @ single-packet headroom.
+        constant MAX_PAYLOAD_LENGTH = 255
+
+        @ Depth of the local ground-station pending-TX hold queue (used only
+        @ when comStatusOut is unwired, i.e. no ComQueue retry path -- see
+        @ Rfm9XManager::usesLocalTxHold()). Each slot costs one Fw::Buffer +
+        @ one ComCfg::FrameContext (roughly 168 bytes on a 32-bit target),
+        @ the single largest RAM cost in this component at the default depth
+        @ of 8. A flight deployment with a real ComQueue wired up never
+        @ fills this queue and can set it to 0 or 1.
+        constant PENDING_TX_DEPTH = 8
     }
 }
